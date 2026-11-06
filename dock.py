@@ -105,6 +105,8 @@ def pull(c, image, log):
         return
     if image == BOX_IMAGE:
         return build_box(c, log)
+    if image.startswith("chamber/ios-"):
+        raise ChamberError("ios_missing", image=image)  # 사용자의 IOS 파일로만 만든다 (cobweb)
     repo, tag = image, None
     if "@" not in image and ":" in image.rsplit("/", 1)[-1]:
         repo, tag = image.rsplit(":", 1)
@@ -185,16 +187,28 @@ def box_name(lab_id, node_id):
     return f"chamber-{lab_id}-{node_id}"
 
 
-def ensure_box(c, lab, node, log):
-    """box 컨테이너가 있고 실행 중이게. 이미지·역할이 바뀌었으면 새로 만든다. → 컨테이너 id"""
+def data_volume(lab_id, node_id):
+    """Cisco box 의 NVRAM(wr mem) · idle-pc 를 지키는 볼륨. 컨테이너를 새로 만들어도 남는다."""
+    return f"chamber-{lab_id}-{node_id}-data"
+
+
+def ensure_box(c, lab, node, log, ios=None):
+    """box 컨테이너가 있고 실행 중이게. 이미지·역할이 바뀌었으면 새로 만든다. → 컨테이너 id
+    ios: Cisco(Dynamips) box 면 (환경 변수, 시작 설정 글, 알고 있는 idle-pc) 를 돌려주는 함수."""
     name = box_name(lab["id"], node["id"])
     image = node.get("image") or BOX_IMAGE
     role = node["kind"]
+    want_env = ios()[0] if ios else {}
     try:
         i = c.inspect_container(name)
         env = dict(e.split("=", 1) for e in i["Config"].get("Env") or [] if "=" in e)
         caps = set(i["HostConfig"].get("CapAdd") or [])
-        if i["Config"]["Image"] != image or env.get("CHAMBER_ROLE") != role or (role == "router" and not caps & {"SYS_ADMIN", "CAP_SYS_ADMIN"}):
+        changed = i["Config"]["Image"] != image or env.get("CHAMBER_ROLE") != role
+        if ios:
+            changed |= any(env.get(k) != v for k, v in want_env.items())  # 포트 수가 바뀌면 새로 (설정은 볼륨에 남는다)
+        elif role == "router" and not caps & {"SYS_ADMIN", "CAP_SYS_ADMIN"}:
+            changed = True
+        if changed:
             c.remove_container(name, force=True)
             raise NotFound("changed")
         if i["Config"].get("Hostname") != _hostname(node["name"]):
@@ -205,10 +219,25 @@ def ensure_box(c, lab, node, log):
     except NotFound:
         pass
     pull(c, image, log)
+    labels = {LAB_LABEL: lab["id"], NODE_LABEL: node["id"], WHALE_GROUP: f"chamber · {lab['name']}"}
+    if ios:
+        env, cfg, idle = ios()
+        vol = data_volume(lab["id"], node["id"])
+        fresh = not any(v["Name"] == vol for v in (c.volumes(filters={"name": vol}).get("Volumes") or []))
+        if fresh:
+            c.create_volume(vol, labels={LAB_LABEL: lab["id"], NODE_LABEL: node["id"]})
+        hc = c.create_host_config(network_mode="none", init=True, cap_add=["NET_ADMIN", "NET_RAW"], binds={vol: {"bind": "/data", "mode": "rw"}})
+        r = c.create_container(image, name=name, hostname=_hostname(node["name"]), host_config=hc, labels=labels,
+                               environment={"CHAMBER_ROLE": role, **env})
+        # 처음 만든 라우터에만 bullet 설정을 넣는다 (그 뒤로는 라우터에 저장한 설정이 우선)
+        from ios import config_archive
+        c.put_archive(r["Id"], "/", config_archive(cfg, push=fresh, idle=idle))
+        c.start(r["Id"])
+        log("box_created", name=node["name"])
+        return r["Id"]
     caps = ["NET_ADMIN", "NET_RAW"] + (["SYS_ADMIN"] if role == "router" else [])  # FRR(zebra) 이 SYS_ADMIN 을 요구한다
     hc = c.create_host_config(network_mode="none", init=True, cap_add=caps,
                               dns=["1.1.1.1", "8.8.8.8"], sysctls={"net.ipv4.ip_forward": "1" if role == "router" else "0"})
-    labels = {LAB_LABEL: lab["id"], NODE_LABEL: node["id"], WHALE_GROUP: f"chamber · {lab['name']}"}
     cmd = None if image == BOX_IMAGE else _keepalive_cmd(c, image)
     r = c.create_container(image, name=name, hostname=_hostname(node["name"]), host_config=hc, labels=labels,
                            environment={"CHAMBER_ROLE": role}, command=cmd, tty=cmd is not None, stdin_open=cmd is not None)
@@ -241,6 +270,10 @@ def remove_box(c, lab_id, node_id):
     try:
         c.remove_container(box_name(lab_id, node_id), force=True)
     except NotFound:
+        pass
+    try:
+        c.remove_volume(data_volume(lab_id, node_id))  # Cisco box 의 NVRAM
+    except (NotFound, APIError):
         pass
 
 

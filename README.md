@@ -38,8 +38,16 @@ Windows cmd ── route 10.77.x.0/24 → WSL(docker-desktop) ── veth ──
 - VcoM: VMware Workstation 또는 VirtualBox (없으면 그 탭만 비어 있음)
 - Boom 연동: Boom 실행 + AWS 연결
 
+## Cisco 라우터 (Dynamips)
+가지고 있는 Cisco IOS 이미지(.bin)로 진짜 IOS 라우터 box 를 만듭니다. cobweb → **Cisco IOS (Dynamips)** → "IOS 파일 가져오기".
+- 지원 플랫폼: c3725 · c3745 · c2691 · c3640 · c7200 (파일 이름으로 알아봅니다. 예: `c3725-adventerprisek9-mz.124-15.T5.bin`)
+- 처음 가져올 때 [dynamips](https://github.com/GNS3/dynamips)(GNS3, GPL)를 이 PC 에서 빌드합니다 (1~3분). KVM 이 없어도 됩니다.
+- 포트(FastEthernet)는 Chamber 의 선에 그대로 꽂히고, FRR 라우터 · 리눅스 PC 와 섞어 쓸 수 있습니다 (자동 OSPF 도 서로 붙습니다).
+- bullet(IP · 게이트웨이 · 경로 · OSPF)은 처음 만들 때 IOS 설정으로 한 번 들어갑니다. 그 뒤로는 **IOS 콘솔**에서 설정하고 `wr mem` 으로 저장하세요 (볼륨에 남습니다). "설정 다시 넣기" 로 bullet 설정을 다시 덮어쓸 수 있습니다.
+- idle-pc 를 처음 부팅 때 자동으로 계산해 기억합니다 (라우터 하나 CPU 100% → 수 %).
+
 ## 라이선스가 있는 이미지
-Cisco IOS · IOU, Juniper 같은 이미지는 Chamber 가 받아 주지 않습니다. 가진 이미지를 `docker load` 로 넣고 cobweb 의 "이름으로 받기" 나 box 이미지 칸에 이름을 쓰면 됩니다.
+Cisco IOS · IOL, Juniper 같은 이미지는 Chamber 가 받아 주지 않습니다. Cisco IOS 는 위처럼 가진 파일을 가져오고, 다른 이미지는 `docker load` 로 넣은 뒤 box 이미지 칸에서 이름으로 고르면 됩니다. IOS 이미지는 이 PC 밖으로 나가지 않습니다.
 
 ## 실행 (개발)
 ```
@@ -53,5 +61,6 @@ build.bat          :: Chamber.exe (+ NSIS 가 있으면 Chamber-Setup) 를 만�
 - Windows 경로는 재부팅하면 사라지는 임시 경로입니다. chamber 를 시작할 때마다 맞춥니다.
 
 ## 아직 안 되는 것
+- Cisco IOL · IOSv · CSR (IOL 은 다음에. VM 이미지는 KVM 이 없는 Windows 10 WSL2 에서 너무 느립니다)
 - VM 네트워크 카드를 chamber 선에 꽂기 (지금은 VcoM 으로 켜고 끄고 정보만)
 - QEMU 이미지(VyOS, OpenWrt …) 장비

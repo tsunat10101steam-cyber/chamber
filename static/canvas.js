@@ -14,6 +14,13 @@ const KIND = {
 };
 const WIRED = new Set(["router", "switch", "pc", "server", "host", "whale"]);
 const BOX_W = 176;
+// Cisco(Dynamips) 라우터: 이미지 이름이 chamber/ios-<플랫폼>:… , 포트 이름은 cobweb 목록(S.cob.platforms)에서
+const isIOS = (img) => (img || "").startsWith("chamber/ios-");
+const iosPlat = (img) => isIOS(img) ? img.slice(12).split(":")[0] : "";
+const iosPorts = (img) => S.cob?.platforms?.[iosPlat(img)] || [];
+const shortIf = (s) => s.replace("FastEthernet", "Fa").replace("GigabitEthernet", "Gi");
+function portLabel(n, i) { return isIOS(n.image) && iosPorts(n.image)[i] ? shortIf(iosPorts(n.image)[i]) : n.ifaces[i].name; }
+function maxPorts(n) { return isIOS(n.image) ? iosPorts(n.image).length || 2 : n.kind === "host" ? 1 : 16; }
 const byNode = (id) => S.lab.nodes.find(n => n.id === id);
 const linkAt = (nid, ifc) => S.lab.links.find(l => (l.a.node === nid && l.a.ifc === ifc) || (l.b.node === nid && l.b.ifc === ifc));
 const peerOf = (l, nid, ifc) => (l.a.node === nid && l.a.ifc === ifc) ? l.b : l.a;
@@ -32,6 +39,7 @@ function renderPalette() {
   h += item("switch", t("k_switch"), t("k_switch_s"), {});
   h += item("pc", t("k_pc"), t("k_pc_s"), {});
   h += item("server", t("k_server"), t("k_server_s"), {});
+  for (const im of S.cob?.ios || []) h += item("router", `Cisco ${im.platform}`, im.file, { image: im.image });
   h += item("host", t("k_host"), t("k_host_s"), {},
     hasHost ? t("host_one") : S.engine && !S.engine.wsl ? t("host_no_wsl") : "");
   h += item("note", t("k_note"), t("k_note_s"), {});
@@ -89,7 +97,7 @@ function addNode(spec, x, y) {
     n.info = v ? { os: v.os, cpus: v.cpus, mem: v.mem, nics: v.nics } : null;
   } else if (spec.kind === "aws") { n.name = spec.name; n.ref = spec.ref; n.info = spec.info; }
   else if (spec.kind === "note") { n.name = t("k_note"); n.note = t("note_default"); }
-  else { n.name = nextName(k.name); n.image = k.image || ""; }
+  else { n.name = nextName(k.name); n.image = spec.image || k.image || ""; }
   S.lab.nodes.push(n);
   return n;
 }
@@ -150,6 +158,7 @@ async function importBoom() {
 
 // ---------------------------------------------------------------- 그리기
 function boxSub(n) {
+  if (isIOS(n.image)) return `Cisco ${iosPlat(n.image)} · IOS`;
   if (n.kind === "whale") return t("k_whale");
   if (n.kind === "vm") return n.info?.os || "VM";
   if (n.kind === "aws") return `${n.info?.region || ""} · ${n.info?.cidr || ""}`;
@@ -167,9 +176,9 @@ function renderBoard() {
     el.style.left = n.x + "px"; el.style.top = n.y + "px";
     let ports = "";
     if (WIRED.has(n.kind)) {
-      ports = `<div class="ports">${n.ifaces.map(f => {
+      ports = `<div class="ports">${n.ifaces.map((f, i) => {
         const l = linkAt(n.id, f.name);
-        return `<div class="port" data-ifc="${esc(f.name)}"><b>${esc(f.name)}</b><span class="ip">${esc(n.kind === "switch" ? "" : f.ip || "–")}</span>
+        return `<div class="port" data-ifc="${esc(f.name)}" title="${esc(f.name)}"><b>${esc(portLabel(n, i))}</b><span class="ip">${esc(n.kind === "switch" ? "" : f.ip || "–")}</span>
           <i class="pin${l ? " on" : ""}" data-pin="${esc(f.name)}" title="${esc(t("pin_hint"))}"></i></div>`;
       }).join("")}</div>`;
     } else if (n.kind === "vm") {
@@ -300,7 +309,7 @@ board.addEventListener("dblclick", (e) => {
   const boxEl = document.elementFromPoint(e.clientX, e.clientY)?.closest(".box");
   if (!boxEl) return;
   const n = byNode(boxEl.dataset.node);
-  if (WIRED.has(n.kind) && n.kind !== "host") openConsole(n, "sh");
+  if (WIRED.has(n.kind) && n.kind !== "host") openConsole(n, isIOS(n.image) ? "ios" : "sh");
 });
 addEventListener("keydown", (e) => {
   if (S.tab !== "lab" || !S.sel || document.querySelector("dialog[open]")) return;
@@ -338,7 +347,7 @@ function freeIface(n, want) {
   if (want) return linkAt(n.id, want) ? null : want;
   const f = n.ifaces.find(f => !linkAt(n.id, f.name));
   if (f) return f.name;
-  if (n.kind === "host" || n.ifaces.length >= 16) return null;
+  if (n.kind === "host" || n.ifaces.length >= maxPorts(n)) return null;
   const base = n.kind === "whale" ? "ch" : "eth";
   let i = 0;
   while (n.ifaces.some(f => f.name === base + i)) i++;

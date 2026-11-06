@@ -21,6 +21,11 @@ Docker 위의 네트워크 실습실 Windows 앱. 같은 사람이 만든 Boom(A
   도우미의 배포판 pid 는 `/proc/*/status` 의 `NSpid` 로 찾는다.
 - docker-desktop 배포판의 `ip` 는 busybox 라 veth 이름 · netns 문법이 깨진다. 반드시 도우미의 iproute2 로.
 - FRR(zebra)은 `SYS_ADMIN` 이 필요하다 (라우터 box 에만 준다).
+- Cisco(Dynamips) box: `ios.py`. 런타임 이미지 `chamber/dynamips:1`(GNS3 dynamips 소스 빌드 + 드라이버 `chamber-ios.py`),
+  IOS 마다 `chamber/ios-<플랫폼>:<파일>`. 드라이버는 하이퍼바이저 모드로: 포트가 꽂히길 기다림 → `linux_eth` NIO → 시작 →
+  idle-pc 계산(`/data/idlepc`) → ifindex 가 바뀌면 NIO 다시 붙임. `/data` 는 box 마다 볼륨(NVRAM 보존).
+  리눅스 쪽에서는 선만 올리고 IP · 경로는 IOS 시작 설정(`/chamber/startup.cfg`, `/chamber/push` 가 있을 때만 넣음)으로.
+- IOS 이미지를 받아 주는 기능은 넣지 않는다. 사용자의 파일로만 만든다.
 - Windows 의 파이프 오류는 OSError 가 아닌 `pywintypes.error` 다. 소켓 읽기는 `except Exception`.
 
 ## 규칙

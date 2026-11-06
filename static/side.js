@@ -55,12 +55,13 @@ function pingBlock(ip) {
 // ---- box
 function boxPanel(n) {
   const st = S.status?.boxes?.[n.id];
-  const kindLabel = t("k_" + n.kind);
+  const kindLabel = isIOS(n.image) ? `Cisco ${iosPlat(n.image)}` : t("k_" + n.kind);
   let h = head(n, kindLabel + (st ? ` · ${t("box_" + (["running", "exited", "created", "missing", "none"].includes(st) ? st : "other"))}` : ""));
   const acts = [];
   if (WIRED.has(n.kind) && n.kind !== "host") {
-    acts.push(`<button class="primary" data-act="console">${esc(t("a_console"))}</button>`);
+    acts.push(`<button class="primary" data-act="${isIOS(n.image) ? "ios" : "console"}">${esc(t(isIOS(n.image) ? "a_ios_console" : "a_console"))}</button>`);
     if (n.kind === "router" && !n.image) acts.push(`<button data-act="vtysh">vtysh</button>`);
+    if (isIOS(n.image)) acts.push(`<button data-act="iosreset" title="${esc(t("ios_reset_s"))}">${esc(t("ios_reset"))}</button>`);
   }
   if (n.kind === "vm") {
     const v = S.vcom?.vms.find(v => v.hv === n.ref?.hv && v.id === n.ref?.id);
@@ -79,7 +80,7 @@ function boxPanel(n) {
     h += `<h4>${esc(t("h_ports"))}${n.kind !== "host" ? `<button class="mini" data-act="addif">${esc(t("add_port"))}</button>` : ""}</h4><div class="bul">`;
     for (const [i, f] of n.ifaces.entries()) {
       const l = linkAt(n.id, f.name), pe = l && peerOf(l, n.id, f.name), pn = pe && byNode(pe.node);
-      h += `<div class="bul-row"><b class="mono">${esc(f.name)}</b>
+      h += `<div class="bul-row"><b class="mono" title="${esc(f.name)}">${esc(portLabel(n, i))}</b>
         ${n.kind === "switch" ? `<span class="muted small">${esc(t("l2_port"))}</span>` :
           `<input type="text" class="mono" data-if="${i}" value="${esc(f.ip)}" placeholder="10.77.1.1/24">`}
         ${l ? `<button class="x" data-unlink="${esc(l.id)}" title="${esc(t("unlink"))}">⨯</button>` :
@@ -104,7 +105,8 @@ function boxPanel(n) {
     const opts = imageOptions(n.kind);
     h += `<label class="field"><span>${esc(t("image"))}</span><select data-f="image">${opts.map(o =>
       `<option value="${esc(o.v)}" ${o.v === (n.image || "") ? "selected" : ""}>${esc(o.l)}</option>`).join("")}</select></label>`;
-    if (n.kind === "router" && n.image) h += `<p class="muted small">${esc(t("image_router_note"))}</p>`;
+    if (isIOS(n.image)) h += `<p class="muted small">${esc(t("ios_note", { n: maxPorts(n) }))}</p>`;
+    else if (n.kind === "router" && n.image) h += `<p class="muted small">${esc(t("image_router_note"))}</p>`;
     if (n.kind === "switch" && n.image) h += `<p class="muted small">${esc(t("image_switch_note"))}</p>`;
   }
   if (n.kind === "vm") h += vmInfo(n);
@@ -118,6 +120,7 @@ function imageOptions(kind) {
   const o = [{ v: "", l: t("image_default") }];
   const cat = S.cob?.catalog || [];
   for (const c of cat) if (!c.builtin && c.kinds.includes(kind)) o.push({ v: c.image, l: `${t("cw." + c.id)} · ${c.image}${c.have ? "" : " " + t("image_will_pull")}` });
+  if (kind === "router") for (const im of S.cob?.ios || []) o.push({ v: im.image, l: `Cisco ${im.platform} · ${im.file}` });
   for (const m of S.cob?.mine || []) o.push({ v: m.image, l: m.image });
   const cur = byNode(S.sel?.id)?.image;
   if (cur && !o.some(x => x.v === cur)) o.push({ v: cur, l: cur });
@@ -187,7 +190,8 @@ side.addEventListener("click", async (e) => {
   const act = b.dataset.act;
   if (act === "remove") return removeSel();
   if (act === "ping") return winPing();
-  if (act === "console" || act === "vtysh") return openConsole(n, act === "vtysh" ? "vtysh" : "sh");
+  if (act === "console" || act === "vtysh" || act === "ios") return openConsole(n, act === "console" ? "sh" : act);
+  if (act === "iosreset") return iosReset(n);
   if (act === "addif") return addPort(n);
   if (act === "addroute") { n.routes.push({ dst: "", via: "" }); renderSide(); return; }
   if (b.dataset.unlink) { S.lab.links = S.lab.links.filter(l => l.id !== b.dataset.unlink); renderBoard(); renderSide(); return save(); }
@@ -195,8 +199,13 @@ side.addEventListener("click", async (e) => {
   if (b.dataset.rmrt !== undefined) { n.routes.splice(+b.dataset.rmrt, 1); renderSide(); return save(); }
   if (b.dataset.vm) return vmAct(n, b.dataset.vm, b);
 });
+async function iosReset(n) {
+  if (!(await ask(t("ios_reset_q", { n: n.name }), t("ios_reset_body"), t("ios_reset"), { danger: true }))) return;
+  await doSave();
+  runJob(`/api/lab/${S.lab.id}/ios_reset`, t("ios_reset_job", { n: n.name }), { node: n.id });
+}
 function addPort(n) {
-  if (n.ifaces.length >= 16) return toast(t("no_free_port", { n: n.name }));
+  if (n.ifaces.length >= maxPorts(n)) return toast(t("no_free_port", { n: n.name }));
   const base = n.kind === "whale" ? "ch" : "eth";
   let i = 0;
   while (n.ifaces.some(f => f.name === base + i)) i++;
@@ -225,7 +234,7 @@ async function vmAct(n, action, btn) {
 }
 function openConsole(n, mode) {
   if (!S.status?.boxes?.[n.id] || S.status.boxes[n.id] !== "running") return toast(t("start_first"));
-  openTerm({ lab: S.lab.id, node: n.id, name: n.name + (mode === "vtysh" ? " · vtysh" : ""), mode });
+  openTerm({ lab: S.lab.id, node: n.id, name: n.name + (mode === "vtysh" ? " · vtysh" : mode === "ios" ? " · IOS" : ""), mode });
 }
 
 // ---------------------------------------------------------------- cobweb (이미지 저장소)
@@ -254,9 +263,19 @@ async function renderCobweb(reload) {
       <button class="primary" id="cwPull">${esc(t("cw_pull_name"))}</button></div>
     <p class="muted small">${esc(t("cw_license"))}</p>
     <div class="cards">${S.cob.catalog.map(card).join("")}</div>
+    <div class="sec"><div class="sec-h"><b>${esc(t("cw_ios"))}</b><span class="muted small">${esc(t("cw_ios_s"))}</span><span class="sp"></span>
+      <button class="primary" id="iosPick" ${PULLS.__ios ? "disabled" : ""}>${esc(t("cw_ios_pick"))}</button></div>
+      ${PULLS.__ios ? `<div style="padding:10px 14px"><div class="bar"><i style="width:${PULLS.__ios.pct || 3}%"></i></div><div class="muted small">${esc(PULLS.__ios.text || "")}</div></div>` : ""}
+      ${S.cob.ios.length ? `<table><thead><tr><th>${esc(t("name"))}</th><th>${esc(t("cw_ios_plat"))}</th><th>${esc(t("cw_ios_ports"))}</th><th></th></tr></thead><tbody>
+        ${S.cob.ios.map(im => `<tr><td><b>${esc(im.file)}</b><span class="sub mono">${esc(im.image)}</span></td><td>Cisco ${esc(im.platform)}</td>
+          <td class="mono small">${esc(im.ports.map(shortIf).join(" · "))}</td>
+          <td><div class="acts"><button class="mini ghost" data-cwrm="${esc(im.image)}">${esc(t("remove"))}</button></div></td></tr>`).join("")}</tbody></table>`
+        : `<div class="empty">${esc(t("cw_ios_none"))}</div>`}
+      <p class="muted small" style="margin:10px 14px">${esc(t("cw_ios_about", { list: Object.keys(S.cob.platforms || {}).join(", ") }))}</p></div>
     <div class="sec"><div class="sec-h"><b>${esc(t("cw_mine"))}</b><span class="muted small">${esc(t("cw_mine_s"))}</span></div>
       ${S.cob.mine.length ? `<div class="cards" style="border:0">${S.cob.mine.map(card).join("")}</div>` : `<div class="empty">${esc(t("cw_mine_none"))}</div>`}</div></div>`;
   $("#cwPull").onclick = () => { const v = $("#cwName").value.trim(); if (v) pullImage(v); };
+  $("#iosPick").onclick = importIOS;
   $("#cwName").onkeydown = (e) => { if (e.key === "Enter") $("#cwPull").click(); };
   el.querySelectorAll("[data-cwpull]").forEach(b => b.onclick = () => pullImage(b.dataset.cwpull));
   el.querySelectorAll("[data-cwrm]").forEach(b => b.onclick = async () => {
@@ -285,6 +304,35 @@ async function pullImage(image) {
   if (p.status === "done") toast(t("cw_done", { n: image }));
   delete PULLS[image];
   if (S.tab === "cobweb") renderCobweb(true); else S.cob = null;
+}
+
+// Cisco IOS 가져오기: 이 PC 의 파일 선택 창 → box 이미지 만들기 (처음엔 dynamips 도 빌드)
+async function importIOS() {
+  let pick;
+  try { pick = await api("/api/cobweb/ios_pick", {}); } catch (e) { return toast(e.message); }
+  if (!pick.path) return;
+  if (!(await ask(t("cw_ios_q"), t("cw_ios_q_body", { f: pick.path, p: pick.platform }), t("cw_ios_go")))) return;
+  let r;
+  try { r = await api("/api/cobweb/ios_import", { path: pick.path }); } catch (e) { return toast(e.message); }
+  const p = PULLS.__ios = { status: "running", pct: 3, text: t("cw_pulling") };
+  renderCobweb();
+  let since = 0, steps = 0;
+  while (p.status === "running") {
+    await new Promise(res => setTimeout(res, 800));
+    let j;
+    try { j = await api(`/api/jobs/${r.job_id}?since=${since}`); } catch { continue; }
+    since = j.next; p.status = j.status;
+    for (const l of j.logs) {
+      if (l.k === "build_step") p.pct = Math.min(95, 5 + (++steps) * 8);
+      p.text = logText(l);
+      if (l.k === "error") toast(p.text);
+    }
+    if (S.tab === "cobweb") renderCobweb();
+  }
+  delete PULLS.__ios;
+  if (p.status === "done") toast(t("cw_ios_done"));
+  S.cob = await api("/api/cobweb").catch(() => S.cob);
+  if (S.tab === "cobweb") renderCobweb(); else renderPalette();
 }
 
 // ---------------------------------------------------------------- VcoM (가상 머신)
@@ -322,4 +370,4 @@ async function renderVcom(reload) {
   });
 }
 // box 이미지 고르기에 cobweb 목록이 필요하다
-api("/api/cobweb").then(c => { S.cob = c; }, () => {});
+api("/api/cobweb").then(c => { S.cob = c; renderPalette(); if (S.lab) renderBoard(); }, () => {});

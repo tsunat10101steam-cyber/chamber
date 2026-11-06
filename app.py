@@ -22,6 +22,7 @@ import boomlink
 import cobweb
 import dock
 import engine
+import ios
 import updater
 import vcom
 import winroute
@@ -249,6 +250,29 @@ def box_remove(lab_id):
     return call(lambda c: (dock.remove_box(c, engine.load(lab_id)["id"], nid), jsonify(ok=True))[1])
 
 
+@app.post("/api/lab/<lab_id>/ios_reset")
+def lab_ios_reset(lab_id):
+    """Cisco 라우터에 bullet 설정을 다시 넣고 다시 켠 뒤 선을 다시 꽂는다."""
+    nid = str(request.get_json(force=True).get("node") or "")
+    try:
+        lab = engine.load(lab_id)
+        c = client()
+    except ChamberError as e:
+        return fail(e.code, **e.params)
+    lk = _lab_lock(lab_id)
+    if not lk.acquire(blocking=False):
+        return fail("busy", 409)
+
+    def run(log):
+        try:
+            engine.ios_reset(c, lab, nid)
+            log("ios_reset")
+            engine.start(c, lab, log)
+        finally:
+            lk.release()
+    return job(run)
+
+
 @app.post("/api/winping")
 def winping():
     ip = str(request.get_json(force=True).get("ip") or "")
@@ -272,6 +296,36 @@ def cobweb_pull():
     except ChamberError as e:
         return fail(e.code, **e.params)
     return job(lambda log: (dock.pull(c, image, log), {"image": image})[1])
+
+
+@app.post("/api/cobweb/ios_pick")
+def ios_pick():
+    """IOS 파일 고르기: 이 PC 의 파일 선택 창 (서버가 이 PC 에서 돌기 때문에 올릴 필요 없이 경로만 받는다)."""
+    ps = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms;"
+          "$f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Cisco IOS (*.bin;*.image)|*.bin;*.image|*.*|*.*';"
+          "$f.InitialDirectory = Join-Path $env:USERPROFILE 'Downloads';"
+          "$o = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
+          "if ($f.ShowDialog($o) -eq 'OK') { $f.FileName }")
+    r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, timeout=600,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    path = r.stdout.decode("utf-8", "replace").strip()
+    if not path:
+        return jsonify(path="")
+    try:
+        return jsonify(path=path, platform=ios.detect(path), tag=ios.image_tag(path))
+    except ChamberError as e:
+        return fail(e.code, **e.params)
+
+
+@app.post("/api/cobweb/ios_import")
+def ios_import():
+    path = str(request.get_json(force=True).get("path") or "")
+    try:
+        ios.detect(path)
+        c = client()
+    except ChamberError as e:
+        return fail(e.code, **e.params)
+    return job(lambda log: {"image": ios.build_ios(c, path, log)})
 
 
 @app.post("/api/cobweb/remove")
@@ -372,7 +426,11 @@ def term_open():
 
     def run(c):
         ctr, node = engine.box_ctr(c, engine.load(str(b.get("lab") or "")), str(b.get("node") or ""))
-        cmd = ["vtysh"] if mode == "vtysh" and node["kind"] == "router" and not node.get("image") else None
+        cmd = None
+        if mode == "vtysh" and node["kind"] == "router" and not node.get("image"):
+            cmd = ["vtysh"]
+        elif mode == "ios" and ios.is_ios(node.get("image")):
+            cmd = ["telnet", "127.0.0.1", "2000"]  # 라우터 콘솔 (dynamips)
         sid = uuid.uuid4().hex
         eid, sock = dock.exec_shell(c, ctr, cols, rows, sid, cmd)
         T = {"sock": sock, "exec": eid, "ctr": ctr, "out": [], "done": False, "cond": threading.Condition()}

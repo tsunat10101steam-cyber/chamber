@@ -38,7 +38,9 @@ def listing(c):
         known.add(x["image"])
     mine = [{"id": "", "image": t, "kinds": ["pc", "server", "router"], "license": "", "have": True, "local_size": s, "mine": True}
             for t, s in sorted(local.items()) if t not in known and not t.startswith("chamber/")]
-    return {"catalog": items, "mine": mine}
+    import ios
+    return {"catalog": items, "mine": mine, "ios": ios.list_images(c), "dyn": dock.has_image(c, ios.DYN_IMAGE),
+            "platforms": {k: [x[2] for x in ios.ports(k)] for k in ios.PLATFORMS}}
 
 
 def check_image(name):
@@ -50,7 +52,7 @@ def check_image(name):
 
 def remove(c, image):
     image = check_image(image)
-    if image == dock.BOX_IMAGE:
-        # 기본 이미지는 도우미(chamber-netd)도 쓴다
+    if image in (dock.BOX_IMAGE, "chamber/dynamips:1"):
+        # 기본 이미지는 도우미(chamber-netd)도, dynamips 는 IOS 이미지들이 쓴다
         raise dock.ChamberError("in_use", name=image)
     c.remove_image(image)

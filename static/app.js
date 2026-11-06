@@ -177,7 +177,7 @@ function paintStatus() {
   paintBoxStates();
   if (S.sel === null || S.sel?.t === "box") paintSideStatus();
 }
-async function runJob(path, title) {
+async function runJob(path, title, body = {}) {
   if (S.job) return;
   await doSave();
   if (S.saveErr) return toast(S.saveErr);
@@ -186,7 +186,7 @@ async function runJob(path, title) {
   list.innerHTML = "";
   box.classList.remove("hidden");
   let r;
-  try { r = await api(path, {}); } catch (e) { list.innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
+  try { r = await api(path, body); } catch (e) { list.innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
   S.job = r.job_id;
   paintStatus();
   let since = 0, last = null, status = "running";

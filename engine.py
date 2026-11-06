@@ -17,6 +17,7 @@ from pathlib import Path
 from docker.errors import APIError, NotFound
 
 import dock
+import ios
 from dock import ChamberError
 
 DATA = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Chamber"
@@ -31,6 +32,7 @@ LAB_ID_RE = re.compile(r"[0-9a-f]{8}")
 IMAGE_RE = re.compile(r"[a-z0-9][a-z0-9._/:@-]{0,200}")
 CTR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 WIRE_FILE = DATA / "wired.json"
+IDLE_FILE = DATA / "ios_idlepc.json"  # IOS 이미지마다 한 번 계산한 idle-pc (다음 라우터는 바로 씀)
 
 
 def _load_wired():
@@ -148,7 +150,7 @@ def clean(lab):
                 "x": max(0, min(int(n.get("x") or 0), 5000)), "y": max(0, min(int(n.get("y") or 0), 4000))}
         if kind in ("router", "pc", "server", "switch"):
             img = str(n.get("image") or "").strip()
-            if img and not IMAGE_RE.fullmatch(img):
+            if img and not IMAGE_RE.fullmatch(img) or ios.is_ios(img) and kind != "router":
                 _bad("image")
             node["image"] = img
         if kind == "whale":
@@ -288,6 +290,11 @@ def start(c, lab, log):
         raise ChamberError("no_wsl")
     dock.ensure_netd(c, log)
     pids, ctrs = {}, {}
+    by0 = {n["id"]: n for n in lab["nodes"]}
+
+    def peer_kind(nid, ifc):
+        pe = _peer(lab, nid, ifc)
+        return by0[pe["node"]]["kind"] if pe else ""
     for n in wired:
         if n["kind"] == "host":
             continue
@@ -301,7 +308,11 @@ def start(c, lab, log):
                 i = c.inspect_container(i["Id"])
             cid = i["Id"]
         else:
-            cid = dock.ensure_box(c, lab, n, log)
+            spec = None
+            if ios.is_ios(n.get("image")):
+                spec = (lambda n=n: (ios.env_for(n["image"], n), ios.startup_config(lab, n, p, peer_kind),
+                                     _idle_cache().get(n["image"], "")))
+            cid = dock.ensure_box(c, lab, n, log, ios=spec)
             i = c.inspect_container(cid)
         pids[n["id"]], ctrs[cid] = i["State"]["Pid"], i["State"]["StartedAt"]
     by = {n["id"]: n for n in lab["nodes"]}
@@ -354,6 +365,10 @@ def start(c, lab, log):
             S += [f"run ns {P} ip link add br0 type bridge", f"run ns {P} ip link set br0 up"]
             for f in linked:
                 S += [f"run ns {P} ip link set {_sq(f['name'])} master br0", f"run ns {P} ip link set {_sq(f['name'])} up"]
+            continue
+        if ios.is_ios(n.get("image")):  # Cisco: 리눅스 쪽은 선만 올리고 주소 · 경로는 IOS 가 (시작 설정)
+            for f in linked:
+                S.append(f"run ns {P} ip link set {_sq(f['name'])} up")
             continue
         for f in linked:
             if f["ip"]:
@@ -462,6 +477,12 @@ def stop(c, lab, remove=False):
                 c.stop(x["Id"], timeout=3)
         except NotFound:
             pass
+    if remove:
+        for v in c.volumes(filters={"label": f"{dock.LAB_LABEL}={lab['id']}"}).get("Volumes") or []:
+            try:
+                c.remove_volume(v["Name"])
+            except (NotFound, APIError):
+                pass
     if dock.wsl_ready() and any(n["kind"] == "host" for n in lab["nodes"]):
         nets = (st or {}).get("subnets") or plan(clean(lab))["subnets"]
         S = [f"ip link del {_root_if(lab['id'], k)} 2>/dev/null" for k in range(4)]
@@ -496,6 +517,8 @@ def status(c, lab):
             s = x["State"] if x else "none"
         boxes[n["id"]] = s
         running += s == "running"
+        if s == "running" and ios.is_ios(n.get("image")) and n["image"] not in _idle_cache():
+            _learn_idle(c, lab, n)
     wired = False
     if st and running == total and total:
         try:
@@ -516,3 +539,42 @@ def box_ctr(c, lab, nid):
     if not n or n["kind"] not in WIRED or n["kind"] == "host":
         raise ChamberError("not_found", detail="box")
     return n["ctr"] if n["kind"] == "whale" else dock.box_name(lab["id"], nid), n
+
+
+# ---------------------------------------------------------------- Cisco (Dynamips)
+def _idle_cache():
+    try:
+        return json.loads(IDLE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _learn_idle(c, lab, n):
+    """라우터 안에서 계산된 idle-pc 를 이미지별로 기억한다 (같은 이미지의 다음 라우터는 처음부터 CPU 를 덜 쓴다)."""
+    try:
+        code, out = dock.run_in(c, dock.box_name(lab["id"], n["id"]), ["cat", "/data/idlepc"])
+    except (NotFound, APIError):
+        return
+    pc = out.strip()
+    if code == 0 and re.fullmatch(r"0x[0-9a-f]{6,16}", pc):
+        d = _idle_cache()
+        d[n["image"]] = pc
+        DATA.mkdir(parents=True, exist_ok=True)
+        IDLE_FILE.write_text(json.dumps(d), encoding="utf-8")
+
+
+def ios_reset(c, lab, nid):
+    """bullet 설정을 라우터에 다시 넣고 다시 켠다 (라우터에 저장한 설정은 덮어쓴다)."""
+    lab = clean(lab)
+    n = next((x for x in lab["nodes"] if x["id"] == nid), None)
+    if not n or not ios.is_ios(n.get("image")):
+        raise ChamberError("not_found", detail="box")
+    by0 = {x["id"]: x for x in lab["nodes"]}
+
+    def peer_kind(a, ifc):
+        pe = _peer(lab, a, ifc)
+        return by0[pe["node"]]["kind"] if pe else ""
+    name = dock.box_name(lab["id"], nid)
+    cfg = ios.startup_config(lab, n, plan(lab), peer_kind)
+    c.put_archive(name, "/", ios.config_archive(cfg, push=True))
+    c.restart(name, timeout=5)

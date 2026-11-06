@@ -5,6 +5,17 @@ const LANGS = [["ko", "한국어"], ["en", "English"]];
 
 const I18N = {
   en: {
+    a_ios_console: "IOS console", ios_reset: "Reapply config", ios_reset_s: "Push the bullets (port IPs, gateway, routes, OSPF) into IOS again",
+    ios_reset_q: "Reapply config to {n}?", ios_reset_body: "Overwrites the config saved on the router (wr mem) with one built from the bullets and reboots it (about a minute).",
+    ios_reset_job: "Reapply config to {n}", ios_note: "Cisco IOS (Dynamips). Up to {n} ports. The bullets go in once when the box is created; after that configure it in the IOS console and save with wr mem.",
+    cw_ios: "Cisco IOS (Dynamips)", cw_ios_s: "Turn an IOS image (.bin) you own into a Cisco router box", cw_ios_pick: "Import IOS file…",
+    cw_ios_plat: "Platform", cw_ios_ports: "Ports", cw_ios_none: "No IOS images imported yet",
+    cw_ios_about: "Platforms: {list}. The first import builds dynamips (GNS3, GPL) on this PC (1–3 min). Your IOS image never leaves this PC.",
+    cw_ios_q: "Make a box from this IOS image?", cw_ios_q_body: "{f}\nCisco {p} router", cw_ios_go: "Create", cw_ios_done: "The Cisco router is ready in the palette",
+    "log.ios_copy": "Adding IOS image {name}…", "log.ios_reset": "Config applied and router rebooted (IOS takes about a minute)",
+    "err.ios_platform": "Unknown platform for {name} (supported: {list})", "err.ios_file": "Can't read the IOS file: {name}",
+    "err.ios_not_elf": "{name} is compressed; dynamips needs the uncompressed .bin/.image",
+    "err.ios_ports": "{name} takes at most {n} ports", "err.ios_missing": "{image} isn't on this PC. Import the IOS file again in cobweb",
     tab_lab: "Chamber", settings: "Settings", refresh: "Refresh", loading: "Loading…", close: "Close", cancel: "Cancel", ok: "OK",
     retry: "Try again", remove: "Remove", name: "Name", state: "State", running: "running", stopped: "stopped",
     disconnected: "Docker not connected", no_docker_title: "Can't reach Docker", load_failed: "Couldn't load",
@@ -72,7 +83,7 @@ const I18N = {
     aws_note: "View only — imported from Boom. Nothing is created in AWS.",
 
     cw_about: "Device images for boxes. Free and open images download here; bring licensed images (like Cisco) yourself.",
-    cw_license: "Licensed images (Cisco IOS, Juniper …) are never downloaded by Chamber. Load your own with docker load and use it by name.",
+    cw_license: "Licensed images (Cisco IOS, Juniper …) are never downloaded by Chamber. Import a Cisco IOS image you own below, or load other images with docker load and use them by name.",
     cw_name_ph: "Image name, e.g. frrouting/frr:v8.4.0", cw_pull_name: "Pull by name", cw_have: "on this PC", cw_pull: "Download",
     cw_build: "Build", cw_pulling: "Starting…", cw_done: "{n} is ready", cw_mine: "My images", cw_mine_s: "Other images on this PC, usable as boxes",
     cw_mine_none: "None yet",
@@ -102,6 +113,17 @@ const I18N = {
     "err.check_failed": "Update check failed: {detail}",
   },
   ko: {
+    a_ios_console: "IOS 콘솔", ios_reset: "설정 다시 넣기", ios_reset_s: "bullet(포트 IP · 게이트웨이 · 경로 · OSPF)을 IOS 설정으로 다시 넣습니다",
+    ios_reset_q: "{n} 에 설정을 다시 넣을까요?", ios_reset_body: "라우터에 저장한 설정(wr mem)을 bullet 으로 만든 설정으로 덮어쓰고 라우터를 다시 켭니다 (1분쯤).",
+    ios_reset_job: "{n} 설정 다시 넣기", ios_note: "Cisco IOS (Dynamips). 포트는 최대 {n}개. bullet 설정은 처음 만들 때 한 번 들어가고, 그 뒤로는 IOS 콘솔에서 설정하고 wr mem 으로 저장하세요.",
+    cw_ios: "Cisco IOS (Dynamips)", cw_ios_s: "가지고 있는 IOS 이미지(.bin)로 Cisco 라우터 box 를 만듭니다", cw_ios_pick: "IOS 파일 가져오기…",
+    cw_ios_plat: "플랫폼", cw_ios_ports: "포트", cw_ios_none: "아직 가져온 IOS 이미지가 없습니다",
+    cw_ios_about: "지원 플랫폼: {list}. 처음 가져올 때 dynamips(GNS3, GPL)를 이 PC 에서 빌드합니다 (1~3분). IOS 이미지는 이 PC 밖으로 나가지 않습니다.",
+    cw_ios_q: "이 IOS 이미지로 box 를 만들까요?", cw_ios_q_body: "{f}\nCisco {p} 라우터", cw_ios_go: "만들기", cw_ios_done: "Cisco 라우터를 팔레트에서 쓸 수 있습니다",
+    "log.ios_copy": "IOS 이미지 {name} 넣는 중…", "log.ios_reset": "설정을 넣고 라우터를 다시 켰습니다 (IOS 부팅 1분쯤)",
+    "err.ios_platform": "{name} 의 플랫폼을 모르겠습니다 (지원: {list})", "err.ios_file": "IOS 파일을 읽을 수 없습니다: {name}",
+    "err.ios_not_elf": "{name} 은(는) 압축된 이미지라 dynamips 가 못 읽습니다 (압축 풀린 .bin/.image 를 쓰세요)",
+    "err.ios_ports": "{name} 은(는) 포트를 {n}개까지만 쓸 수 있습니다", "err.ios_missing": "{image} 가 이 PC 에 없습니다. cobweb 에서 IOS 파일을 다시 가져오세요",
     tab_lab: "Chamber", settings: "설정", refresh: "새로 고침", loading: "불러오는 중…", close: "닫기", cancel: "취소", ok: "확인",
     retry: "다시 시도", remove: "지우기", name: "이름", state: "상태", running: "실행 중", stopped: "중지됨",
     disconnected: "Docker 연결 안 됨", no_docker_title: "Docker 에 연결할 수 없습니다", load_failed: "불러오지 못했습니다",
@@ -170,7 +192,7 @@ const I18N = {
     aws_note: "보기 전용 — Boom 에서 가져온 것입니다. AWS 에는 아무것도 만들지 않습니다.",
 
     cw_about: "box 로 쓸 장비 이미지. 자유 라이선스 이미지는 여기서 받고, 라이선스가 있는 이미지(Cisco 등)는 직접 가져오세요.",
-    cw_license: "라이선스가 있는 이미지(Cisco IOS, Juniper …)는 Chamber 가 받아 주지 않습니다. 가진 것을 docker load 로 넣고 이름으로 쓰세요.",
+    cw_license: "라이선스가 있는 이미지(Cisco IOS, Juniper …)는 Chamber 가 받아 주지 않습니다. 가진 Cisco IOS 이미지는 아래에서 가져오고, 다른 이미지는 docker load 로 넣어 이름으로 쓰세요.",
     cw_name_ph: "이미지 이름, 예: frrouting/frr:v8.4.0", cw_pull_name: "이름으로 받기", cw_have: "이 PC 에 있음", cw_pull: "받기",
     cw_build: "만들기", cw_pulling: "시작하는 중…", cw_done: "{n} 준비됨", cw_mine: "내 이미지", cw_mine_s: "이 PC 의 다른 이미지 — box 로 쓸 수 있습니다",
     cw_mine_none: "아직 없음",
