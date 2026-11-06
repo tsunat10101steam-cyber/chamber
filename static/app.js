@@ -160,10 +160,25 @@ async function pollStatus() {
   if (lab && S.tab === "lab" && !document.hidden) {
     try {
       const st = await api(`/api/lab/${lab.id}/status`);
-      if (S.lab === lab) { S.status = st; paintStatus(); }
+      if (S.lab === lab) {
+        S.status = st;
+        if (st.synced?.length) applySynced(st.synced);
+        paintStatus();
+      }
     } catch { /* Docker 가 잠깐 끊겼을 때 */ }
   }
   statusTimer = setTimeout(pollStatus, 4000);
+}
+// Cisco 라우터에서 wr mem 한 설정을 서버가 bullet 으로 가져왔다 → 화면의 chamber 에도 넣는다 (서버 파일은 이미 저장됨)
+function applySynced(list) {
+  for (const x of list) {
+    const n = S.lab.nodes.find(n => n.id === x.id);
+    if (!n) continue;
+    Object.assign(n, x);
+    toast(t("ios_synced", { n: n.name }));
+  }
+  renderBoard();
+  if (!side.contains(document.activeElement)) renderSide();
 }
 function paintStatus() {
   const st = S.status, busy = !!S.job;

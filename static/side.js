@@ -105,7 +105,7 @@ function boxPanel(n) {
     const opts = imageOptions(n.kind);
     h += `<label class="field"><span>${esc(t("image"))}</span><select data-f="image">${opts.map(o =>
       `<option value="${esc(o.v)}" ${o.v === (n.image || "") ? "selected" : ""}>${esc(o.l)}</option>`).join("")}</select></label>`;
-    if (isIOS(n.image)) h += `<p class="muted small">${esc(t("ios_note", { n: maxPorts(n) }))}</p>`;
+    if (isIOS(n.image)) h += `${n.ios_sync ? `<div class="ok-note">${esc(t("ios_from_router"))}</div>` : ""}<p class="muted small">${esc(t("ios_note", { n: maxPorts(n) }))}</p>`;
     else if (n.kind === "router" && n.image) h += `<p class="muted small">${esc(t("image_router_note"))}</p>`;
     if (n.kind === "switch" && n.image) h += `<p class="muted small">${esc(t("image_switch_note"))}</p>`;
   }

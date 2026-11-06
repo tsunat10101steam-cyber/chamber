@@ -387,3 +387,55 @@ def config_archive(text, push, idle=""):
     if idle:
         files["chamber/idlepc"] = idle.encode()  # 같은 IOS 이미지로 이미 계산한 값
     return _tar(files).getvalue()
+
+
+# ---------------------------------------------------------------- IOS → bullet (wr mem 한 설정을 화이트보드로)
+# 라우터 안에서 하이퍼바이저에 붙어 NVRAM 의 startup-config 를 읽는다. 콘솔은 건드리지 않는다
+# (dynamips 콘솔은 모든 연결이 한 화면을 같이 써서, 사용자가 설정 모드일 때 끼어들면 안 된다)
+EXTRACT = (
+    "import socket, base64\n"
+    "s = socket.create_connection(('127.0.0.1', 7200), timeout=5); f = s.makefile('rwb', buffering=0)\n"
+    "f.write(b'vm extract_config R\\r\\n'); q = f.readline().decode('latin-1').split(\"'\")\n"
+    "print(base64.b64decode(q[3]).decode('latin-1') if len(q) > 3 else '')\n"
+)
+
+
+def user_saved(text):
+    """사용자가 wr mem 으로 저장한 설정인가 (Chamber 가 넣은 것은 hostname 으로 시작, IOS 가 저장한 것은 '!' · version 머리말)."""
+    lines = [l for l in text.replace("\r", "").split("\n") if l.strip()]
+    return bool(lines) and not lines[0].startswith("hostname")
+
+
+def parse_config(text, platform):
+    """IOS 설정 → (hostname, {포트 순번: 'a.b.c.d/len' 또는 ''}, 기본 게이트웨이, [정적 경로])"""
+    names = [x[2] for x in ports(platform)]
+    host, ifs, gw, routes, cur = "", {}, "", [], None
+    for raw in text.replace("\r", "").split("\n"):
+        l = raw.rstrip()
+        if l.startswith("hostname "):
+            host = l.split(None, 1)[1].strip()
+        m = re.match(r"interface (\S+)$", l)
+        if m:
+            cur = names.index(m.group(1)) if m.group(1) in names else None
+            if cur is not None:
+                ifs[cur] = ""
+            continue
+        if l and not l.startswith(" "):
+            cur = None
+        if cur is not None:
+            m = re.match(r" ip address (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+)$", l)  # secondary 는 뺀다
+            if m:
+                try:
+                    ifs[cur] = str(ipaddress.ip_interface(f"{m.group(1)}/{m.group(2)}"))
+                except ValueError:
+                    pass
+        m = re.match(r"ip route (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+)", l)
+        if m:
+            if m.group(1) == "0.0.0.0" and m.group(2) == "0.0.0.0":
+                gw = m.group(3)
+            else:
+                try:
+                    routes.append({"dst": str(ipaddress.IPv4Network(f"{m.group(1)}/{m.group(2)}", strict=False)), "via": m.group(3)})
+                except ValueError:
+                    pass
+    return host, ifs, gw, routes

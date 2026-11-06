@@ -181,6 +181,8 @@ def clean(lab):
             routes.append({"dst": dst, "via": _addr(str(r.get("via") or "").strip(), "via")})
         node["routes"] = routes if kind in ("router", "pc", "server", "whale") else []
         node["note"] = str(n.get("note") or "")[:2000]
+        if kind == "router" and ios.is_ios(node.get("image")):
+            node["ios_sync"] = str(n.get("ios_sync") or "")[:16]  # wr mem 한 설정을 bullet 으로 가져온 것의 지문
         nodes.append(node)
     out["nodes"] = nodes
     by = {n["id"]: n for n in nodes}
@@ -533,9 +535,10 @@ def status(c, lab):
         except NotFound:
             wired = False
     state = "running" if wired else "stale" if running else "stopped"
+    synced = ios_sync(c, lab, boxes)
     return {"state": state, "boxes": boxes, "running": running, "total": total,
             "wsl_ip": (st or {}).get("wsl_ip", ""), "subnets": (st or {}).get("subnets", []),
-            "host_nets": (st or {}).get("host_nets", [])}
+            "host_nets": (st or {}).get("host_nets", []), "synced": synced}
 
 
 def box_ctr(c, lab, nid):
@@ -583,3 +586,48 @@ def ios_reset(c, lab, nid):
     # 넣으라는 표시는 볼륨(/data/push)에: 이어지는 시작에서 컨테이너를 새로 만들어도 남는다
     c.put_archive(name, "/", ios.config_archive(cfg, push="volume"))
     c.restart(name, timeout=5)
+
+
+SYNC_AT: dict[str, float] = {}  # "lab/node" → 마지막으로 읽은 때
+
+
+def ios_sync(c, lab, boxes, every=8):
+    """실행 중인 Cisco 라우터의 NVRAM 설정(wr mem)이 바뀌었으면 그 포트 IP · 게이트웨이 · 경로 · 이름을 bullet 으로.
+    → 바뀐 box 들 (화면이 받아서 고친다). 파일에도 바로 저장한다."""
+    import hashlib
+    out = []
+    for n in lab["nodes"]:
+        if n["kind"] != "router" or not ios.is_ios(n.get("image")) or boxes.get(n["id"]) != "running":
+            continue
+        key = f"{lab['id']}/{n['id']}"
+        if time.time() - SYNC_AT.get(key, 0) < every:
+            continue
+        SYNC_AT[key] = time.time()
+        try:
+            code, text = dock.run_in(c, dock.box_name(lab["id"], n["id"]), ["python3", "-c", ios.EXTRACT])
+        except (NotFound, APIError):
+            continue
+        if code != 0 or not ios.user_saved(text):
+            continue  # 아직 wr mem 하지 않았다 (Chamber 가 넣은 설정 그대로)
+        h = hashlib.sha1(text.encode("latin-1", "replace")).hexdigest()[:16]
+        if n.get("ios_sync") == h:
+            continue
+        host, ifs, gw, routes = ios.parse_config(text, ios.platform_of(n["image"]))
+        for i, f in enumerate(n["ifaces"]):
+            if i in ifs:
+                f["ip"] = ifs[i]
+        n["gw"], n["routes"], n["ios_sync"] = gw, routes, h
+        if host and NAME_RE.fullmatch(host):
+            n["name"] = host
+        out.append({k: n[k] for k in ("id", "name", "ifaces", "gw", "routes", "ios_sync")})
+    if out:
+        try:
+            cur = load(lab["id"])
+            by = {x["id"]: x for x in out}
+            for n in cur["nodes"]:
+                if n["id"] in by:
+                    n.update(by[n["id"]])
+            save(cur)
+        except ChamberError:
+            pass
+    return out
