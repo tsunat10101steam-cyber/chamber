@@ -369,6 +369,10 @@ def start(c, lab, log):
         if ios.is_ios(n.get("image")):  # Cisco: 리눅스 쪽은 선만 올리고 주소 · 경로는 IOS 가 (시작 설정)
             for f in linked:
                 S.append(f"run ns {P} ip link set {_sq(f['name'])} up")
+            # 선이 없는 포트는 빈 장치(dummy)로: dynamips 가 붙을 곳이 있어야 라우터가 켜진다. 나중에 선을 이으면 veth 로 바뀐다
+            for f in n["ifaces"]:
+                if f not in linked:
+                    S += [f"run ns {P} ip link add {_sq(f['name'])} type dummy", f"run ns {P} ip link set {_sq(f['name'])} up"]
             continue
         for f in linked:
             if f["ip"]:
@@ -576,5 +580,6 @@ def ios_reset(c, lab, nid):
         return by0[pe["node"]]["kind"] if pe else ""
     name = dock.box_name(lab["id"], nid)
     cfg = ios.startup_config(lab, n, plan(lab), peer_kind)
-    c.put_archive(name, "/", ios.config_archive(cfg, push=True))
+    # 넣으라는 표시는 볼륨(/data/push)에: 이어지는 시작에서 컨테이너를 새로 만들어도 남는다
+    c.put_archive(name, "/", ios.config_archive(cfg, push="volume"))
     c.restart(name, timeout=5)

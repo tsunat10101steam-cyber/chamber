@@ -93,7 +93,8 @@ SLOTS = [s.split(":") for s in os.environ.get("CHAMBER_SLOTS", "").split()]     
 PORTS = [p.split("=") for p in os.environ.get("CHAMBER_PORTS", "").split()]           # "eth0=0/0"
 DATA = "/data"
 IDLE = os.path.join(DATA, "idlepc")
-PUSH = "/chamber/push"
+PUSH = "/chamber/push"        # 처음 만든 라우터
+PUSH2 = "/data/push"          # '설정 다시 넣기' (볼륨에 남아서 컨테이너를 새로 만들어도 지켜진다)
 CFG = "/chamber/startup.cfg"
 NAME = "R"
 
@@ -141,13 +142,19 @@ def stop(*_):
     sys.exit(0)
 signal.signal(signal.SIGTERM, stop)
 
-# 1) Chamber 가 선(eth…)을 꽂을 때까지 기다린다
+# 1) Chamber 가 포트(eth…)를 꽂을 때까지 잠깐 기다린다 (선이 없는 포트는 dummy 로 꽂힌다).
+#    20초가 지나도 없는 포트는 두고 시작하고, 나중에 생기면 아래 4) 에서 붙인다
 log("waiting for ports", [p[0] for p in PORTS])
-while not all(ifindex(d) for d, _ in PORTS):
+t0 = time.time()
+while not all(ifindex(d) for d, _ in PORTS) and time.time() - t0 < 20:
     time.sleep(0.5)
+
+def prep(dev):
+    subprocess.run(["ip", "link", "set", dev, "up"])
+    subprocess.run(["sh", "-c", f"echo 1 > /proc/sys/net/ipv6/conf/{dev}/disable_ipv6"], stderr=subprocess.DEVNULL)
 for d, _ in PORTS:
-    subprocess.run(["ip", "link", "set", d, "up"])
-    subprocess.run(["sh", "-c", f"echo 1 > /proc/sys/net/ipv6/conf/{d}/disable_ipv6"], stderr=subprocess.DEVNULL)
+    if ifindex(d):
+        prep(d)
 seen = {d: ifindex(d) for d, _ in PORTS}
 
 # 2) 라우터
@@ -165,17 +172,52 @@ def bind(dev, sp):
     cmd(f"nio create_linux_eth nio_{dev} {dev}")
     cmd(f"vm slot_add_nio_binding {NAME} {s} {p} nio_{dev}")
 for d, sp in PORTS:
-    bind(d, sp)
+    if seen[d]:
+        bind(d, sp)
+    else:
+        log("port missing, will bind later", d)
 if not os.path.exists(IDLE) and os.path.exists("/chamber/idlepc"):
     open(IDLE, "w").write(open("/chamber/idlepc").read().strip())
 if os.path.exists(IDLE):
     cmd(f"vm set_idle_pc {NAME} {open(IDLE).read().strip()}")
-if os.path.exists(PUSH) and os.path.exists(CFG):
+# bullet 설정을 넣을지: 처음이거나(PUSH) 사용자가 '설정 다시 넣기' 를 눌렀을 때.
+# 또는 bullet 이 바뀌었는데 라우터에서 저장(wr mem)한 적이 없을 때 — NVRAM 이 Chamber 가 마지막에 넣은 그대로면 덮어써도 된다
+PUSHED = os.path.join(DATA, "pushed.cfg")
+norm = lambda t: [l.rstrip() for l in t.replace("\r", "").split("\n") if l.strip()]
+push = os.path.exists(PUSH) or os.path.exists(PUSH2)
+if not push and os.path.exists(CFG) and not os.path.exists(PUSHED):
+    # 예전 드라이버로 만든 라우터(기록 없음): NVRAM 이 비었거나 Chamber 가 넣은 모양(hostname 으로 시작)이면 넣는다.
+    # IOS 가 wr mem 으로 저장한 설정은 '!' · 'version 12.4' 머리말로 시작하므로 그대로 둔다
+    try:
+        import base64
+        q = cmd(f"vm extract_config {NAME}", True)[-1].split("'")
+        cur = norm(base64.b64decode(q[3]).decode("latin-1")) if len(q) > 3 else []
+        if not cur or cur[0].startswith("hostname"):
+            push = True
+            log("no push record, router config is Chamber-made: pushing")
+    except Exception as e:
+        log("extract_config failed", e)
+if not push and os.path.exists(CFG) and os.path.exists(PUSHED) and norm(open(CFG).read()) != norm(open(PUSHED).read()):
+    try:
+        import base64
+        r = cmd(f"vm extract_config {NAME}", True)[-1]  # 100-conf 'R' '<startup b64>' '<private b64>'
+        q = r.split("'")
+        cur = base64.b64decode(q[3]).decode("latin-1") if len(q) > 3 else ""
+        if norm(cur) == norm(open(PUSHED).read()):
+            push = True
+            log("bullets changed and router config was not saved by hand: pushing")
+        else:
+            log("bullets changed but router has its own saved config: keeping it")
+    except Exception as e:
+        log("extract_config failed", e)
+if push and os.path.exists(CFG):
     cmd(f"vm set_config {NAME} {CFG}")
+    open(PUSHED, "w").write(open(CFG).read())
     log("startup-config pushed")
 cmd(f"vm start {NAME}")
-if os.path.exists(PUSH):
-    os.remove(PUSH)  # 다음 부팅부터는 라우터에 저장된 설정(wr mem)을 쓴다
+for p in (PUSH, PUSH2):
+    if os.path.exists(p):
+        os.remove(p)  # 다음 부팅부터는 라우터에 저장된 설정(wr mem)을 쓴다
 log("started")
 started = time.time()
 
@@ -208,7 +250,7 @@ while True:
         if now and now != seen[d]:
             s, p = sp.split("/")
             log("rebind", d)
-            subprocess.run(["ip", "link", "set", d, "up"])
+            prep(d)
             cmd(f"vm slot_disable_nio {NAME} {s} {p}", True)
             cmd(f"vm slot_remove_nio_binding {NAME} {s} {p}", True)
             cmd(f"nio delete nio_{d}", True)
@@ -286,6 +328,9 @@ def list_images(c):
 
 
 # ---------------------------------------------------------------- box 설정
+DRIVER_VER = __import__("hashlib").sha1(DRIVER.encode()).hexdigest()[:10]
+
+
 def env_for(image, node):
     plat = platform_of(image)
     spec = PLATFORMS[plat]
@@ -294,7 +339,8 @@ def env_for(image, node):
         raise ChamberError("ios_ports", name=node["name"], n=len(pl))
     slots = " ".join(f"{s}:{m}" for s, m, _ in spec["slots"] if m)
     pm = " ".join(f"{f['name']}={pl[i][0]}/{pl[i][1]}" for i, f in enumerate(node["ifaces"]))
-    return {"CHAMBER_PLATFORM": plat, "CHAMBER_RAM": str(spec["ram"]), "CHAMBER_SLOTS": slots, "CHAMBER_PORTS": pm}
+    return {"CHAMBER_PLATFORM": plat, "CHAMBER_RAM": str(spec["ram"]), "CHAMBER_SLOTS": slots, "CHAMBER_PORTS": pm,
+            "CHAMBER_DRIVER": DRIVER_VER}
 
 
 def startup_config(lab, node, plan, peer_kind):
@@ -332,7 +378,10 @@ def startup_config(lab, node, plan, peer_kind):
 
 
 def config_archive(text, push, idle=""):
-    files = {"chamber/startup.cfg": text.encode()}
+    files = {"chamber/startup.cfg": text.encode(), "usr/local/bin/chamber-ios.py": DRIVER.encode()}
+    if push == "volume":
+        files = {"chamber/startup.cfg": text.encode(), "data/push": b"1"}
+        return _tar(files).getvalue()
     if push:
         files["chamber/push"] = b"1"
     if idle:

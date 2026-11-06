@@ -440,7 +440,10 @@ def term_open():
         if mode == "vtysh" and node["kind"] == "router" and not node.get("image"):
             cmd = ["vtysh"]
         elif mode == "ios" and ios.is_ios(node.get("image")):
-            cmd = ["telnet", "127.0.0.1", "2000"]  # 라우터 콘솔 (dynamips)
+            # 라우터 콘솔 (dynamips). IOS 가 아직 켜지는 중이면 열릴 때까지 기다린다
+            cmd = ["sh", "-c", "printf 'Waiting for the IOS console (the router may still be booting)'; "
+                   "until python3 -c 'import socket; socket.create_connection((\"127.0.0.1\", 2000), 1)' 2>/dev/null; "
+                   "do printf .; sleep 1; done; echo; exec telnet 127.0.0.1 2000"]
         sid = uuid.uuid4().hex
         eid, sock = dock.exec_shell(c, ctr, cols, rows, sid, cmd)
         T = {"sock": sock, "exec": eid, "ctr": ctr, "out": [], "done": False, "cond": threading.Condition()}

@@ -214,6 +214,9 @@ def ensure_box(c, lab, node, log, ios=None):
         if i["Config"].get("Hostname") != _hostname(node["name"]):
             pass  # 이름만 바뀐 것은 다음에 새로 만들 때 반영 (FRR 설정을 지키려고 지우지 않는다)
         if not i["State"]["Running"]:
+            if ios:
+                from ios import config_archive
+                c.put_archive(name, "/", config_archive(ios()[1], push=False))
             c.start(name)
         return i["Id"]
     except NotFound:
