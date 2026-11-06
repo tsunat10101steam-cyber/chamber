@@ -264,7 +264,9 @@ async function renderCobweb(reload) {
     <p class="muted small">${esc(t("cw_license"))}</p>
     <div class="cards">${S.cob.catalog.map(card).join("")}</div>
     <div class="sec"><div class="sec-h"><b>${esc(t("cw_ios"))}</b><span class="muted small">${esc(t("cw_ios_s"))}</span><span class="sp"></span>
-      <button class="primary" id="iosPick" ${PULLS.__ios ? "disabled" : ""}>${esc(t("cw_ios_pick"))}</button></div>
+      <button class="primary" id="iosPick" ${PULLS.__ios || PICKING ? "disabled" : ""}>${esc(t(PICKING ? "cw_ios_picking" : "cw_ios_pick"))}</button></div>
+      <div class="ping-row" style="margin:10px 14px"><input type="text" class="mono" id="iosPath" placeholder="${esc(t("cw_ios_path_ph"))}">
+        <button id="iosPathGo" ${PULLS.__ios ? "disabled" : ""}>${esc(t("cw_ios_path_go"))}</button></div>
       ${PULLS.__ios ? `<div style="padding:10px 14px"><div class="bar"><i style="width:${PULLS.__ios.pct || 3}%"></i></div><div class="muted small">${esc(PULLS.__ios.text || "")}</div></div>` : ""}
       ${S.cob.ios.length ? `<table><thead><tr><th>${esc(t("name"))}</th><th>${esc(t("cw_ios_plat"))}</th><th>${esc(t("cw_ios_ports"))}</th><th></th></tr></thead><tbody>
         ${S.cob.ios.map(im => `<tr><td><b>${esc(im.file)}</b><span class="sub mono">${esc(im.image)}</span></td><td>Cisco ${esc(im.platform)}</td>
@@ -278,10 +280,9 @@ async function renderCobweb(reload) {
   $("#iosPick").onclick = importIOS;
   $("#cwName").onkeydown = (e) => { if (e.key === "Enter") $("#cwPull").click(); };
   el.querySelectorAll("[data-cwpull]").forEach(b => b.onclick = () => pullImage(b.dataset.cwpull));
-  el.querySelectorAll("[data-cwrm]").forEach(b => b.onclick = async () => {
-    try { await api("/api/cobweb/remove", { image: b.dataset.cwrm }); } catch (e) { toast(e.message); }
-    renderCobweb(true);
-  });
+  el.querySelectorAll("[data-cwrm]").forEach(b => b.onclick = () => removeImage(b.dataset.cwrm));
+  $("#iosPath").onkeydown = (e) => { if (e.key === "Enter") $("#iosPathGo").click(); };
+  $("#iosPathGo").onclick = () => { const v = $("#iosPath").value.trim().replace(/^"|"$/g, ""); if (v) importIOS(v); };
 }
 async function pullImage(image) {
   let r;
@@ -307,13 +308,21 @@ async function pullImage(image) {
 }
 
 // Cisco IOS 가져오기: 이 PC 의 파일 선택 창 → box 이미지 만들기 (처음엔 dynamips 도 빌드)
-async function importIOS() {
-  let pick;
-  try { pick = await api("/api/cobweb/ios_pick", {}); } catch (e) { return toast(e.message); }
-  if (!pick.path) return;
-  if (!(await ask(t("cw_ios_q"), t("cw_ios_q_body", { f: pick.path, p: pick.platform }), t("cw_ios_go")))) return;
+let PICKING = false;
+async function importIOS(path) {
+  if (typeof path !== "string") {  // 버튼: 이 PC 의 파일 선택 창
+    if (PICKING) return;
+    PICKING = true; renderCobweb();
+    toast(t("cw_ios_picking_s"));
+    let pick;
+    try { pick = await api("/api/cobweb/ios_pick", {}); } catch (e) { PICKING = false; renderCobweb(); return toast(e.message); }
+    PICKING = false; renderCobweb();
+    if (!pick.path) return;
+    path = pick.path;
+  }
+  if (!(await ask(t("cw_ios_q"), path, t("cw_ios_go")))) return;
   let r;
-  try { r = await api("/api/cobweb/ios_import", { path: pick.path }); } catch (e) { return toast(e.message); }
+  try { r = await api("/api/cobweb/ios_import", { path }); } catch (e) { return toast(e.message); }
   const p = PULLS.__ios = { status: "running", pct: 3, text: t("cw_pulling") };
   renderCobweb();
   let since = 0, steps = 0;
@@ -333,6 +342,20 @@ async function importIOS() {
   if (p.status === "done") toast(t("cw_ios_done"));
   S.cob = await api("/api/cobweb").catch(() => S.cob);
   if (S.tab === "cobweb") renderCobweb(); else renderPalette();
+}
+
+// 이미지 지우기: 쓰는 box 가 있으면 알려 주고, chamber box 만 쓰면 함께 지울지 묻는다
+async function removeImage(image) {
+  try { await api("/api/cobweb/remove", { image }); }
+  catch (e) {
+    const p = e.data?.params;
+    if (e.data?.error !== "image_in_use" || !p.boxes_only) return toast(e.message);
+    if (!(await ask(t("cw_rm_q", { n: image }), t("cw_rm_body", { u: p.users }), t("cw_rm_go"), { danger: true }))) return;
+    try { await api("/api/cobweb/remove", { image, with_boxes: true }); } catch (e2) { return toast(e2.message); }
+  }
+  toast(t("cw_rm_done", { n: image }));
+  S.cob = await api("/api/cobweb").catch(() => S.cob);
+  renderCobweb(); renderPalette(); pollStatus();
 }
 
 // ---------------------------------------------------------------- VcoM (가상 머신)

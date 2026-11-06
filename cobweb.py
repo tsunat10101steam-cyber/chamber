@@ -50,9 +50,36 @@ def check_image(name):
     return name if ":" in name.rsplit("/", 1)[-1] or "@" in name else name + ":latest"
 
 
-def remove(c, image):
+def users(c, image):
+    """이 이미지를 쓰는 컨테이너: [(id, chamber box 인지, 'chamber 이름 · box 이름')]"""
+    import engine
+    labs = {l["id"]: l["name"] for l in engine.list_labs()}
+    out = []
+    for x in c.containers(all=True, filters={"ancestor": image}):
+        lb = x.get("Labels") or {}
+        lab = lb.get(dock.LAB_LABEL)
+        name = (x.get("Names") or ["/?"])[0].lstrip("/")
+        label = name
+        if lab:
+            try:
+                node = next((n for n in engine.load(lab)["nodes"] if n["id"] == lb.get(dock.NODE_LABEL)), None)
+                label = f"{labs.get(lab, lab)} · {node['name'] if node else name}"
+            except dock.ChamberError:
+                label = f"{lab} · {name}"
+        out.append((x["Id"], bool(lab), label))
+    return out
+
+
+def remove(c, image, with_boxes=False):
+    """이미지 지우기. 쓰는 box 가 있으면 알려 주고, with_boxes 면 그 box 컨테이너도 지운다 (chamber 에 그린 것은 그대로)."""
     image = check_image(image)
     if image in (dock.BOX_IMAGE, "chamber/dynamips:1"):
         # 기본 이미지는 도우미(chamber-netd)도, dynamips 는 IOS 이미지들이 쓴다
         raise dock.ChamberError("in_use", name=image)
+    us = users(c, image)
+    boxes_only = all(is_box for _, is_box, _ in us)
+    if us and not (with_boxes and boxes_only):
+        raise dock.ChamberError("image_in_use", name=image, users=", ".join(u[2] for u in us), boxes_only=boxes_only)
+    for cid, _, _ in us:
+        c.remove_container(cid, force=True)
     c.remove_image(image)

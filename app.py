@@ -298,16 +298,26 @@ def cobweb_pull():
     return job(lambda log: (dock.pull(c, image, log), {"image": image})[1])
 
 
+PICKER = threading.Lock()  # 파일 선택 창은 하나만
+
+
 @app.post("/api/cobweb/ios_pick")
 def ios_pick():
     """IOS 파일 고르기: 이 PC 의 파일 선택 창 (서버가 이 PC 에서 돌기 때문에 올릴 필요 없이 경로만 받는다)."""
+    # 선택 창이 앱 창 뒤에 숨지 않게: 보이지 않는 '맨 위' 창을 실제로 띄우고 그 위에 연다
     ps = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms;"
           "$f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Cisco IOS (*.bin;*.image)|*.bin;*.image|*.*|*.*';"
-          "$f.InitialDirectory = Join-Path $env:USERPROFILE 'Downloads';"
-          "$o = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
-          "if ($f.ShowDialog($o) -eq 'OK') { $f.FileName }")
-    r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, timeout=600,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+          "$f.InitialDirectory = Join-Path $env:USERPROFILE 'Downloads'; $f.Title = 'Chamber - Cisco IOS';"
+          "$o = New-Object System.Windows.Forms.Form; $o.TopMost = $true; $o.ShowInTaskbar = $false; $o.Opacity = 0;"
+          "$o.FormBorderStyle = 'None'; $o.StartPosition = 'CenterScreen'; $o.Width = 1; $o.Height = 1;"
+          "$o.Show(); $o.Activate(); $r = $f.ShowDialog($o); $o.Close(); if ($r -eq 'OK') { $f.FileName }")
+    if not PICKER.acquire(blocking=False):
+        return fail("picker_open", 409)
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, timeout=600,
+                           stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    finally:
+        PICKER.release()
     path = r.stdout.decode("utf-8", "replace").strip()
     if not path:
         return jsonify(path="")
@@ -330,8 +340,8 @@ def ios_import():
 
 @app.post("/api/cobweb/remove")
 def cobweb_remove():
-    image = request.get_json(force=True).get("image")
-    return call(lambda c: (cobweb.remove(c, image), jsonify(ok=True))[1])
+    b = request.get_json(force=True)
+    return call(lambda c: (cobweb.remove(c, b.get("image"), bool(b.get("with_boxes"))), jsonify(ok=True))[1])
 
 
 @app.get("/api/vcom")

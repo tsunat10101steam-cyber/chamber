@@ -5,6 +5,11 @@ const LANGS = [["ko", "한국어"], ["en", "English"]];
 
 const I18N = {
   en: {
+    cw_ios_picking: "Picker open…", cw_ios_picking_s: "Opened the file picker. If you don't see it, check the taskbar",
+    cw_ios_path_ph: "Or paste the IOS file path (e.g. C:\\Users\\me\\Downloads\\c3725-….bin)", cw_ios_path_go: "Import from path",
+    cw_rm_q: "Remove {n}?", cw_rm_body: "Boxes use this image: {u}. Their containers are removed too (the boxes stay on the board; import the image again to start them).",
+    cw_rm_go: "Remove with boxes", cw_rm_done: "Removed {n}",
+    "err.image_in_use": "{name} is in use by: {users}", "err.picker_open": "The file picker is already open",
     a_ios_console: "IOS console", ios_reset: "Reapply config", ios_reset_s: "Push the bullets (port IPs, gateway, routes, OSPF) into IOS again",
     ios_reset_q: "Reapply config to {n}?", ios_reset_body: "Overwrites the config saved on the router (wr mem) with one built from the bullets and reboots it (about a minute).",
     ios_reset_job: "Reapply config to {n}", ios_note: "Cisco IOS (Dynamips). Up to {n} ports. The bullets go in once when the box is created; after that configure it in the IOS console and save with wr mem.",
@@ -113,6 +118,11 @@ const I18N = {
     "err.check_failed": "Update check failed: {detail}",
   },
   ko: {
+    cw_ios_picking: "선택 창 열림…", cw_ios_picking_s: "파일 선택 창을 열었습니다. 안 보이면 작업 표시줄을 확인하세요",
+    cw_ios_path_ph: "또는 IOS 파일 경로를 붙여 넣기 (예: C:\\Users\\나\\Downloads\\c3725-….bin)", cw_ios_path_go: "경로로 가져오기",
+    cw_rm_q: "{n} 을(를) 지울까요?", cw_rm_body: "이 이미지를 쓰는 box 가 있습니다: {u}. 그 box 컨테이너도 함께 지웁니다 (화이트보드의 box 는 남고, 다시 시작하려면 이미지를 다시 가져와야 합니다).",
+    cw_rm_go: "box 와 함께 지우기", cw_rm_done: "{n} 을(를) 지웠습니다",
+    "err.image_in_use": "{name} 은(는) 쓰는 곳이 있습니다: {users}", "err.picker_open": "파일 선택 창이 이미 열려 있습니다",
     a_ios_console: "IOS 콘솔", ios_reset: "설정 다시 넣기", ios_reset_s: "bullet(포트 IP · 게이트웨이 · 경로 · OSPF)을 IOS 설정으로 다시 넣습니다",
     ios_reset_q: "{n} 에 설정을 다시 넣을까요?", ios_reset_body: "라우터에 저장한 설정(wr mem)을 bullet 으로 만든 설정으로 덮어쓰고 라우터를 다시 켭니다 (1분쯤).",
     ios_reset_job: "{n} 설정 다시 넣기", ios_note: "Cisco IOS (Dynamips). 포트는 최대 {n}개. bullet 설정은 처음 만들 때 한 번 들어가고, 그 뒤로는 IOS 콘솔에서 설정하고 wr mem 으로 저장하세요.",
