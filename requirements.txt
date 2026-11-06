@@ -1,0 +1,4 @@
+docker>=7.1
+flask>=3.0
+truststore>=0.10
+certifi

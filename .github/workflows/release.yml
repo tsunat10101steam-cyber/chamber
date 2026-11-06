@@ -1,0 +1,117 @@
+# v* 태그를 푸시하면 Chamber.exe 와 설치 프로그램(Chamber-Setup)을 빌드해서 GitHub 릴리스로 올린다.
+# 앱의 업데이트 버튼은 Chamber-Setup-X.exe 를 받아 조용히(/S) 설치한다.
+# 코드 서명은 아직 없다 (Boom 처럼 SignPath 를 붙이려면 Boom 의 release.yml 서명 단계를 옮겨 오면 된다).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:   # 수동 실행 = 시험 빌드 (릴리스 없이 결과 파일만 올림)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 버전 기록 (태그 → version.py, 시험 빌드는 version.py 그대로)
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+            (Get-Content version.py) -replace '__version__ = ".*"', "__version__ = `"$v`"" | Set-Content version.py -Encoding utf8
+          } else {
+            $v = ([regex]::Match((Get-Content version.py -Raw), '__version__ = "([^"]+)"')).Groups[1].Value
+          }
+          Get-Content version.py
+          "VERSION=$v" >> $env:GITHUB_ENV
+
+      - name: 빌드 (Chamber.exe)
+        run: |
+          pip install -r requirements.txt pyinstaller
+          python tools/version_info.py
+          pyinstaller --noconfirm --clean --windowed --name Chamber --icon app.ico --version-file build/version_info.txt --add-data "static;static" --add-data "app.ico;." app.py
+
+      - name: 빌드한 exe 가 뜨는지 확인 (서버가 응답하고 화면이 나오는지)
+        shell: pwsh
+        run: |
+          # 창 없는 exe 는 시작 오류를 대화상자로만 보여 주므로, 같은 설정의 콘솔 exe 로 출력까지 남겨 확인한다
+          pyinstaller --noconfirm --console --name ChamberCheck --distpath build/check --workpath build/check-work --add-data "static;static" --add-data "app.ico;." app.py | Out-Null
+          $p = Start-Process -FilePath build\check\ChamberCheck\ChamberCheck.exe -ArgumentList "--browser" -PassThru -RedirectStandardOutput check-out.txt -RedirectStandardError check-err.txt
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep 1
+            if ($p.HasExited) { break }
+            try { $r = Invoke-WebRequest http://127.0.0.1:8767/api/version -UseBasicParsing -TimeoutSec 2; $ok = $true; break } catch {}
+          }
+          if (-not $ok) { Get-Content check-out.txt, check-err.txt -ErrorAction SilentlyContinue; throw "Chamber.exe did not start" }
+          Write-Host $r.Content
+          $page = Invoke-WebRequest http://127.0.0.1:8767/ -UseBasicParsing
+          if ($page.Content -notmatch "app.js") { throw "index page missing" }
+          # Docker 가 없는 러너라서 overview 는 no_docker 오류여야 정상
+          try { Invoke-WebRequest http://127.0.0.1:8767/api/overview -UseBasicParsing | Out-Null } catch { Write-Host $_.ErrorDetails.Message }
+          Stop-Process -Id $p.Id -Force
+
+      - name: 설치 프로그램 (NSIS)
+        shell: pwsh
+        run: |
+          function Find-Makensis {
+            @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe",
+              (Get-Command makensis -ErrorAction SilentlyContinue).Source) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          }
+          $nsis = Find-Makensis
+          if (-not $nsis) {
+            # 러너에 NSIS 가 없으면 공식 배포 zip(설치 불필요)을 받아서 쓴다. 안 되면 Chocolatey.
+            $url = "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.10/nsis-3.10.zip"
+            foreach ($i in 1..4) {
+              try {
+                Invoke-WebRequest $url -OutFile nsis.zip -UserAgent "Wget" -MaximumRedirection 10
+                Expand-Archive nsis.zip -DestinationPath "$env:RUNNER_TEMP\nsis" -Force
+                $nsis = (Get-ChildItem "$env:RUNNER_TEMP\nsis" -Recurse -Filter makensis.exe | Select-Object -First 1).FullName
+                if ($nsis) { break }
+              } catch { Write-Host "NSIS download attempt $i failed: $_"; Start-Sleep 10 }
+            }
+          }
+          if (-not $nsis) { choco install nsis -y --no-progress; $nsis = Find-Makensis }
+          if (-not $nsis) { throw "makensis not found" }
+          Write-Host "makensis: $nsis"
+          & $nsis /V2 "/DVERSION=$env:VERSION" installer\chamber.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 시험 빌드 결과 올리기
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chamber-setup
+          path: dist/Chamber-Setup-*.exe
+
+      - name: 압축 (설치 없이 쓰는 버전)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Chamber -DestinationPath "Chamber-${{ github.ref_name }}.zip"
+
+      - name: 릴리스 노트 (CHANGELOG.md 의 해당 버전 항목)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $text = Get-Content CHANGELOG.md -Raw
+          $pattern = '(?ms)^## ' + [regex]::Escape("${{ github.ref_name }}") + '\s*$(.*?)(?=^## |\z)'
+          $m = [regex]::Match($text, $pattern)
+          $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "Chamber ${{ github.ref_name }}" }
+          $notes += "`n`n---`n[License (MIT)](https://github.com/${{ github.repository }}/blob/main/LICENSE)"
+          Set-Content notes.md $notes -Encoding utf8
+
+      - name: 릴리스 만들기
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "${{ github.ref_name }}" "dist/Chamber-Setup-$env:VERSION.exe" "Chamber-${{ github.ref_name }}.zip" --title "Chamber ${{ github.ref_name }}" --notes-file notes.md

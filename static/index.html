@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chamber</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="/static/icon.svg" alt="" width="26" height="26"><b>Chamber</b></div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="lab" data-i18n="tab_lab"></button>
+    <button data-tab="cobweb">cobweb</button>
+    <button data-tab="vcom">VcoM</button>
+  </nav>
+  <span class="sp"></span>
+  <span class="engine" id="engine"></span>
+  <button class="icon-btn" id="btnSettings" data-i18n-title="settings" aria-label="settings">⚙</button>
+</header>
+<div class="update hidden" id="updateBar"></div>
+
+<!-- chamber: 왼쪽 box 팔레트 · 가운데 화이트보드 · 오른쪽 자세히 -->
+<section class="lab" id="labView">
+  <div class="lab-bar">
+    <select id="labSel" aria-label="chamber"></select>
+    <button class="ghost" id="labNew" data-i18n="lab_new"></button>
+    <span class="state" id="labState"></span>
+    <span class="sp"></span>
+    <span class="muted hint" data-i18n="board_hint"></span>
+    <button class="primary" id="labStart" data-i18n="lab_start"></button>
+    <button id="labStop" data-i18n="lab_stop"></button>
+  </div>
+  <aside class="palette" id="palette"></aside>
+  <div class="board-wrap" id="boardWrap">
+    <div class="board" id="board"><svg class="wires" id="wires"></svg></div>
+    <div class="board-empty hidden" id="boardEmpty"></div>
+  </div>
+  <aside class="side" id="side"></aside>
+</section>
+
+<main class="page hidden" id="cobwebView"></main>
+<main class="page hidden" id="vcomView"></main>
+
+<div class="msg-over hidden" id="over"></div>
+
+<!-- 시작 진행 -->
+<div class="jobbox hidden" id="jobBox"><div class="job-h"><b id="jobTitle"></b><span class="sp"></span><button class="ghost mini" id="jobClose">×</button></div><ol id="jobLog"></ol></div>
+
+<!-- box 콘솔 (앱 안 터미널) -->
+<section class="term hidden" id="term">
+  <div class="term-grip" id="termGrip"></div>
+  <div class="term-h"><b class="term-k" data-i18n="term_title"></b><div class="term-tabs" id="termTabs"></div>
+    <button class="ghost icon" id="termMin"></button>
+    <button class="ghost icon" id="termCloseAll" data-i18n-title="term_close_all">×</button></div>
+  <div class="term-body" id="termBody"></div>
+</section>
+
+<dialog id="settings">
+  <h3 data-i18n="settings"></h3>
+  <div class="set-row"><span data-i18n="theme"></span><div class="seg" id="themeSeg">
+    <button data-v="system" data-i18n="th_system"></button><button data-v="light" data-i18n="th_light"></button><button data-v="dark" data-i18n="th_dark"></button></div></div>
+  <div class="set-row"><span data-i18n="language"></span><select id="langSel"></select></div>
+  <label class="chk"><input type="checkbox" id="autoUpd"><span data-i18n="auto_update"></span></label>
+  <p class="muted small"><span id="ver"></span> · <a id="repo" target="_blank" rel="noopener">GitHub</a></p>
+  <div class="row-end"><button class="primary" id="setClose" data-i18n="close"></button></div>
+</dialog>
+
+<dialog id="ask">
+  <h3 id="askTitle"></h3>
+  <p id="askBody" class="muted"></p>
+  <input type="text" id="askInput" class="hidden">
+  <div class="row-end"><button class="ghost" id="askNo" data-i18n="cancel"></button><button class="primary" id="askYes"></button></div>
+</dialog>
+
+<script src="/static/i18n.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/canvas.js"></script>
+<script src="/static/side.js"></script>
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/addon-fit.js"></script>
+<script src="/static/term.js"></script>
+</body>
+</html>
