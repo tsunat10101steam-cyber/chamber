@@ -230,7 +230,7 @@ def plan(lab):
     subnets = sorted({a[2].network for a in addrs}, key=lambda x: (int(x.network_address), x.prefixlen))
     host = next((n for n in wired if n["kind"] == "host"), None)
     host_ips = [a[2] for a in addrs if a[0] is host]
-    gw, issues = {}, []
+    gw, issues, whale_routes = {}, [], {}
     # 같은 IP 두 번
     seen = {}
     for n, f, i in addrs:
@@ -246,6 +246,9 @@ def plan(lab):
             cand.sort(key=lambda a: a[0]["kind"] != "router")
             if cand and n["kind"] != "whale":
                 gw[n["id"]] = str(cand[0][2].ip)
+            elif cand and n["kind"] == "whale":
+                via = str(cand[0][2].ip)
+                whale_routes[n["id"]] = [(str(s), via) for s in subnets if not any(s == m.network for m in mine)]
         if n["kind"] == "router" and not n["gw"] and host_ips:
             mine = [a[2] for a in addrs if a[0] is n]
             h = next((h for h in host_ips if any(h.network == m.network for m in mine)), None)
@@ -272,7 +275,16 @@ def plan(lab):
             if ia.network != ib.network:
                 issues.append({"code": "subnet_mismatch", "a": a["name"], "ai": str(ia), "b": b["name"], "bi": str(ib),
                                "nodes": [a["id"], b["id"]]})
-    return {"subnets": [str(s) for s in subnets], "gw": gw, "host": host_route, "issues": issues}
+    return {"subnets": [str(s) for s in subnets], "gw": gw, "host": host_route, "issues": issues,
+            "whale_routes": whale_routes, "sig": wire_sig(lab)}
+
+
+def wire_sig(lab):
+    """실제로 꽂는 것에 영향을 주는 것만의 지문 (위치 · 이름 · 메모는 빼고)."""
+    import hashlib
+    keep = [{k: n.get(k) for k in ("id", "kind", "image", "ctr", "ifaces", "gw", "routes")} for n in lab["nodes"] if n["kind"] in WIRED]
+    links = sorted((l["a"]["node"], l["a"]["ifc"], l["b"]["node"], l["b"]["ifc"]) for l in lab["links"])
+    return hashlib.sha1(json.dumps([keep, links], sort_keys=True).encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------- 시작 · 중지
@@ -395,6 +407,8 @@ def start(c, lab, log):
         gw = n["gw"] or p["gw"].get(n["id"])
         if gw and n["kind"] != "whale":
             S.append(f"run ns {P} ip route replace default via {_sq(gw)}")
+        for net, via in p["whale_routes"].get(n["id"], []):
+            S.append(f"run ns {P} ip route replace {_sq(net)} via {_sq(via)}")
         for r in n["routes"]:
             if r["via"]:
                 S.append(f"run ns {P} ip route replace {_sq(r['dst'])} via {_sq(r['via'])}")
@@ -432,7 +446,7 @@ def start(c, lab, log):
     # 5) 자동 라우팅: Chamber 이미지 라우터끼리 OSPF (설정은 Chamber 가 맡는다)
     if lab["auto_ospf"]:
         _ospf(c, lab, p, log)
-    WIRE_STATE[lab["id"]] = {"ctrs": ctrs, "wsl_ip": wsl_ip, "subnets": p["subnets"],
+    WIRE_STATE[lab["id"]] = {"ctrs": ctrs, "wsl_ip": wsl_ip, "subnets": p["subnets"], "sig": p["sig"],
                              "host_nets": (p["host"] or {}).get("nets", []) if host else [], "at": time.time()}
     _save_wired()
     log("wired")
@@ -546,7 +560,8 @@ def status(c, lab):
             now = {}
             for cid in st["ctrs"]:
                 now[cid] = c.inspect_container(cid)["State"]["StartedAt"]
-            wired = now == st["ctrs"]
+            # 컨테이너를 다시 켰거나, 꽂은 뒤 box · 선 · IP 를 고쳤으면 '다시 연결 필요'
+            wired = now == st["ctrs"] and st.get("sig") == wire_sig(clean(lab))
         except NotFound:
             wired = False
     state = "running" if wired else "stale" if running else "stopped"
