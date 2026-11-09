@@ -407,6 +407,10 @@ def start(c, lab, log):
         for net in h["nets"]:
             via = f"via {_sq(h['via'])}" if h["via"] else ""
             S.append(f"run $X ip route replace {_sq(net)} {via} dev {root}")
+        # Windows 에서 들어가는 것은 출발지를 이 PC box 주소로 바꾼다(NAT). 그래야 게이트웨이가 없는 장비
+        # (예: wr mem 한 Cisco 설정에 ip route 가 없을 때)도 바로 옆 주소로 답할 수 있다
+        rule = f"POSTROUTING -o {root} -j MASQUERADE"
+        S.append(f"$X iptables -t nat -C {rule} 2>/dev/null || run $X iptables -t nat -A {rule}")
         if lab["internet"]:
             for net in p["subnets"]:
                 rule = f"POSTROUTING -s {_sq(net)} -o eth0 -j MASQUERADE"
@@ -508,6 +512,7 @@ def stop(c, lab, remove=False):
                  'if [ "$#" -ge 3 ] && [ "$3" = "$HP" ]; then H=$2; break; fi; done',
                  'X="nsenter -t $H -m --"'] + [f"$X {x}" for x in S]
             S += [f"$X iptables -t nat -D POSTROUTING -s {_sq(net)} -o eth0 -j MASQUERADE 2>/dev/null" for net in nets]
+            S += [f"$X iptables -t nat -D POSTROUTING -o {_root_if(lab['id'], k)} -j MASQUERADE 2>/dev/null" for k in range(4)]
             dock.wsl_run("\n".join(S) + "\ntrue\n")
         except (NotFound, APIError, OSError):
             pass
