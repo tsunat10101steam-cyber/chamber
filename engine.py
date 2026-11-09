@@ -262,6 +262,16 @@ def plan(lab):
     for n in wired:
         if n["kind"] != "note" and n["ifaces"] and not any(_peer(lab, n["id"], f["name"]) for f in n["ifaces"]):
             issues.append({"code": "no_links", "box": n["name"]})
+    # 선 하나의 양 끝이 서로 다른 서브넷이면 그 선으로는 아무것도 오가지 않는다 (예: 이 PC 10.77.1.254/24 ↔ 라우터 192.168.100.1/24)
+    for l in lab["links"]:
+        a, b = by[l["a"]["node"]], by[l["b"]["node"]]
+        fa = next((f for f in a["ifaces"] if f["name"] == l["a"]["ifc"]), None)
+        fb = next((f for f in b["ifaces"] if f["name"] == l["b"]["ifc"]), None)
+        if fa and fb and fa["ip"] and fb["ip"]:
+            ia, ib = ipaddress.ip_interface(fa["ip"]), ipaddress.ip_interface(fb["ip"])
+            if ia.network != ib.network:
+                issues.append({"code": "subnet_mismatch", "a": a["name"], "ai": str(ia), "b": b["name"], "bi": str(ib),
+                               "nodes": [a["id"], b["id"]]})
     return {"subnets": [str(s) for s in subnets], "gw": gw, "host": host_route, "issues": issues}
 
 

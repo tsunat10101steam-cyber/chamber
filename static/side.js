@@ -76,6 +76,7 @@ function boxPanel(n) {
     if (S.status?.wsl_ip) h += kv([[t("wsl_ip"), `<span class="mono">${esc(S.status.wsl_ip)}</span>`]]);
   }
   if (n.kind === "whale") h += `<p class="small">${esc(t("whale_about", { n: n.ctr }))}</p>`;
+  for (const i of (S.plan?.issues || []).filter(i => i.nodes?.includes(n.id))) h += `<div class="issue">${esc(t("issue." + i.code, i))}</div>`;
   if (WIRED.has(n.kind)) {
     h += `<h4>${esc(t("h_ports"))}${n.kind !== "host" ? `<button class="mini" data-act="addif">${esc(t("add_port"))}</button>` : ""}</h4><div class="bul">`;
     for (const [i, f] of n.ifaces.entries()) {

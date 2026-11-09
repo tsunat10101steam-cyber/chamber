@@ -106,6 +106,7 @@ const I18N = {
     term_title: "Console", term_min: "Minimize", term_max: "Restore", term_close_all: "Close all consoles",
     term_connecting: "Connecting to {n}…", term_ended: "Shell exited (code {code})", term_lost: "Disconnected",
 
+    "issue.subnet_mismatch": "{a} ({ai}) and {b} ({bi}) share a link but are in different subnets, so nothing gets through. Put both ends in the same subnet.",
     "issue.dup_ip": "{ip} is used by both {a} and {b}", "issue.no_links": "{box} has no links",
     "err.no_docker": "Can't connect to Docker: {detail}", "err.docker": "{detail}", "err.not_found": "Not found: {detail}",
     "err.forbidden_origin": "Blocked a request that didn't come from the Chamber window", "err.missing": "Missing: {field}",
@@ -221,6 +222,7 @@ const I18N = {
     term_title: "콘솔", term_min: "접기", term_max: "펼치기", term_close_all: "콘솔 모두 닫기",
     term_connecting: "{n} 에 접속 중…", term_ended: "셸이 끝났습니다 (코드 {code})", term_lost: "연결이 끊겼습니다",
 
+    "issue.subnet_mismatch": "{a} ({ai}) 와 {b} ({bi}) 는 선으로 이어져 있지만 서브넷이 달라서 아무것도 오가지 않습니다. 양쪽 IP 를 같은 서브넷으로 맞추세요.",
     "issue.dup_ip": "{ip} 를 {a} 와 {b} 가 함께 씁니다", "issue.no_links": "{box} 에 연결된 선이 없습니다",
     "err.no_docker": "Docker 에 연결할 수 없음: {detail}", "err.docker": "{detail}", "err.not_found": "없음: {detail}",
     "err.forbidden_origin": "Chamber 창이 아닌 곳에서 온 요청이라 막았습니다", "err.missing": "값이 없습니다: {field}",
