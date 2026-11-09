@@ -2,6 +2,10 @@
 
 릴리스 노트는 이 파일의 해당 버전 항목에서 자동으로 가져온다. 새 버전을 낼 때 맨 위에 `## vX.Y.Z` 항목을 추가하고 같은 이름으로 태그를 푸시한다.
 
+## v0.3.1
+
+- Cisco L3 스위치: PC · 이 PC · 라우터가 꽂힌 access 포트에 spanning-tree portfast 를 넣어, 켜거나 선을 꽂은 뒤 STP 대기(약 30초) 없이 바로 통함
+
 ## v0.3.0
 
 - Cisco L3 스위치 box: c3725 · c3745 · c2691 IOS 에 NM-16ESW(16포트 EtherSwitch)를 꽂아 VLAN · 트렁크 · SVI(interface VlanN) 로 VLAN 사이 라우팅

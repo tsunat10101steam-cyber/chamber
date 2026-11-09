@@ -383,8 +383,12 @@ def startup_config(lab, node, plan, peer_kind):
             v = str(f.get("vlan") or "1")
             if v == "trunk":
                 L += [" switchport trunk encapsulation dot1q", " switchport mode trunk"]
-            elif v != "1":
-                L.append(f" switchport access vlan {v}")
+            else:
+                if v != "1":
+                    L.append(f" switchport access vlan {v}")
+                # PC · 이 PC · 라우터처럼 스위치가 아닌 장비가 꽂히는 포트는 STP 대기(약 30초) 없이 바로 전달
+                if peer_kind(node["id"], f["name"]) not in ("switch", ""):
+                    L.append(" spanning-tree portfast")
             L += [" no shutdown", "!"]
             continue
         if f["ip"]:
