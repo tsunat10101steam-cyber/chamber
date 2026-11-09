@@ -67,8 +67,13 @@ function renderPalette() {
   else h += S.vcom.vms.map(v => item("vm", v.name, `${v.hv === "vmware" ? "VMware" : "VirtualBox"} · ${v.running ? t("running") : t("stopped")}`,
     { ref: { hv: v.hv, id: v.id } })).join("");
   // AWS (Boom)
-  h += `<div class="pal-h">AWS · Boom</div><div class="pal-note">${esc(S.boom?.running ? t("boom_on") : t("boom_off"))}</div>
-    <div class="pal-note"><button class="mini" id="palBoom" ${S.boom?.running ? "" : "disabled"}>${esc(t("boom_import"))}</button></div>`;
+  h += `<div class="pal-h">AWS · Boom</div>`;
+  if (!S.boomVpcs?.length) h += `<div class="pal-note">${esc(S.boom?.running ? t("boom_on") : t("boom_off"))}</div>`;
+  for (const v of S.boomVpcs || []) {
+    const placed = S.lab?.nodes.some(n => n.kind === "aws" && n.ref?.vpc === v.id);
+    h += item("aws", v.name || v.id, `${v.region} · ${v.cidr}`, { vpc: v.id }, placed ? t("aws_placed") : "");
+  }
+  h += `<div class="pal-note"><button class="mini" id="palBoom" ${S.boom?.running ? "" : "disabled"}>${esc(t("boom_import"))}</button></div>`;
   el.innerHTML = h;
   el.querySelectorAll("[data-pal]").forEach(p => {
     p.ondragstart = (e) => { e.dataTransfer.setData("text/chamber", p.dataset.pal); e.dataTransfer.effectAllowed = "copy"; };
@@ -113,6 +118,11 @@ function addNode(spec, x, y) {
   return n;
 }
 function dropItem(spec, x, y) {
+  if (spec.kind === "aws") {  // 옆 메뉴의 Boom VPC → box
+    const v = S.boomVpcs?.find(v => v.id === spec.vpc);
+    if (!v || S.lab.nodes.some(n => n.kind === "aws" && n.ref?.vpc === v.id)) return;
+    spec = { kind: "aws", name: v.name || v.id, ref: { vpc: v.id, region: v.region }, info: vpcInfo(v) };
+  }
   if (x === undefined) [x, y] = freeSpot();  // 더블클릭: 보이는 곳에서 비어 있는 자리
   const n = addNode(spec, x, y);
   S.sel = { t: "box", id: n.id };
@@ -145,24 +155,21 @@ board.addEventListener("drop", (e) => {
   dropItem(JSON.parse(raw), e.clientX - r.left - 30, e.clientY - r.top - 16);
 });
 
+const vpcInfo = (v) => ({ region: v.region, cidr: v.cidr, igw: v.igw, default: v.default, subnets: v.subnets });
 async function importBoom() {
   const b = $("#palBoom");
   b.disabled = true; b.textContent = t("boom_importing");
   try {
     const r = await api("/api/boom/import", {});
-    if (!r.vpcs.length) toast(t("boom_empty"));
-    const w = $("#boardWrap");
-    let x = w.scrollLeft + 60, y = w.scrollTop + 60;
+    // 화이트보드에 바로 그리지 않고 옆 메뉴에 둔다. 이미 놓인 AWS box 는 내용만 새로
+    S.boomVpcs = r.vpcs;
+    let changed = false;
     for (const v of r.vpcs) {
-      const old = S.lab.nodes.find(n => n.kind === "aws" && n.ref?.vpc === v.id);
-      const info = { region: v.region, cidr: v.cidr, igw: v.igw, default: v.default, subnets: v.subnets };
-      if (old) { old.info = info; continue; }  // 다시 가져오면 내용만 새로
-      addNode({ kind: "aws", name: v.name || v.id, ref: { vpc: v.id, region: v.region }, info }, x, y);
-      x += BOX_W + 40;
-      if (x > w.scrollLeft + w.clientWidth - BOX_W) { x = w.scrollLeft + 60; y += 260; }
+      const old = S.lab?.nodes.find(n => n.kind === "aws" && n.ref?.vpc === v.id);
+      if (old) { old.info = vpcInfo(v); changed = true; }
     }
-    renderBoard(); save();
-    if (r.vpcs.length) toast(t("boom_done", { n: r.vpcs.length }));
+    if (changed) { renderBoard(); save(); }
+    toast(r.vpcs.length ? t("boom_done", { n: r.vpcs.length }) : t("boom_empty"));
   } catch (e) { toast(e.message); }
   renderPalette();
 }

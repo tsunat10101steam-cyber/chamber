@@ -20,7 +20,7 @@ Docker 위에서 **실제로 동작하는** 네트워크 실습실을 화이트�
 - 콘솔: box 를 두 번 누르면 아래 패널에 셸, 라우터는 `vtysh` 도
 - 오른쪽 패널의 "cmd 에서 ping" 버튼: 이 PC 에서 바로 ping
 - Whale 연동: 이미 있는 Docker 컨테이너를 box 로 놓으면 포트(`ch0` …)를 더 꽂아 chamber 에 잇는다 (원래 네트워크는 그대로). Chamber 가 만든 컨테이너는 Whale 에서 `chamber · 이름` 묶음으로 보임
-- Boom 연동: Boom 이 켜져 있고 AWS 에 연결돼 있으면 VPC · 서브넷 · 리소스를 AWS box 로 가져오기 (보기 전용)
+- Boom 연동: Boom 이 켜져 있고 AWS 에 연결돼 있으면 VPC 를 왼쪽 목록으로 가져와 필요한 것만 화이트보드에 AWS box 로 놓기 (보기 전용)
 - 한국어 · English, 밝게 · 어둡게, 자동 업데이트
 
 ## 동작 방식

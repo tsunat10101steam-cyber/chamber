@@ -98,7 +98,7 @@ async function openLab(id) {
   store.set("lab", id);
   S.sel = null; S.status = null; S.plan = null;
   paintLabSel();
-  renderBoard(); renderSide();
+  renderBoard(); renderSide(); renderPalette();
   save(true);  // 계획(plan)만 받아 온다
   pollStatus();
 }
