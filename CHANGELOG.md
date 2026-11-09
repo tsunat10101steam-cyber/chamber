@@ -2,6 +2,15 @@
 
 릴리스 노트는 이 파일의 해당 버전 항목에서 자동으로 가져온다. 새 버전을 낼 때 맨 위에 `## vX.Y.Z` 항목을 추가하고 같은 이름으로 태그를 푸시한다.
 
+## v0.3.0
+
+- Cisco L3 스위치 box: c3725 · c3745 · c2691 IOS 에 NM-16ESW(16포트 EtherSwitch)를 꽂아 VLAN · 트렁크 · SVI(interface VlanN) 로 VLAN 사이 라우팅
+- 팔레트에 'Cisco c3725 L3 스위치', 포트는 Fa1/0~15 (스위치) + Fa0/0 · 0/1 (라우티드)
+- bullet: 포트마다 VLAN 번호 또는 trunk, SVI 목록 (VLAN · IP). 포트를 이으면 그 VLAN 의 SVI 와 PC 주소를 자동으로
+- 콘솔에서 wr mem 한 VLAN · 트렁크 · SVI 도 bullet 으로 가져옴. VLAN 은 플래시(vlan.dat)에 저장
+- PC 가 꽂힌 포트 VLAN 의 SVI 와 서브넷이 다르면 경고
+- 라우터 안에서만 바뀌고 서브넷이 그대로면 '다시 연결 필요' 를 띄우지 않음
+
 ## v0.2.7
 
 - 위 막대의 Docker 표시를 짧게: "WSL2" / "WSL2 아님"

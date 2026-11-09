@@ -45,6 +45,7 @@ Windows cmd ── route 10.77.x.0/24 → WSL(docker-desktop) ── veth ──
 - 포트(FastEthernet)는 Chamber 의 선에 그대로 꽂히고, FRR 라우터 · 리눅스 PC 와 섞어 쓸 수 있습니다 (자동 OSPF 도 서로 붙습니다).
 - bullet(IP · 게이트웨이 · 경로 · OSPF)은 처음 만들 때 IOS 설정으로 한 번 들어갑니다. 그 뒤로는 **IOS 콘솔**에서 설정하고 `wr mem` 으로 저장하세요 (볼륨에 남습니다). "설정 다시 넣기" 로 bullet 설정을 다시 덮어쓸 수 있습니다.
 - idle-pc 를 처음 부팅 때 자동으로 계산해 기억합니다 (라우터 하나 CPU 100% → 수 %).
+- **L3 스위치**: c3725 · c3745 · c2691 이미지는 팔레트에 'Cisco … L3 스위치' 로도 나옵니다. NM-16ESW 를 꽂아 Fa1/0~15 는 스위치 포트(포트마다 VLAN 또는 trunk), Fa0/0 · 0/1 은 라우티드 포트. VLAN 마다 SVI(IP)를 넣으면 VLAN 사이를 라우팅합니다. 진짜 Catalyst 가 아니라서 STP · EtherChannel 같은 기능은 일부만 됩니다.
 
 ## 라이선스가 있는 이미지
 Cisco IOS · IOL, Juniper 같은 이미지는 Chamber 가 받아 주지 않습니다. Cisco IOS 는 위처럼 가진 파일을 가져오고, 다른 이미지는 `docker load` 로 넣은 뒤 box 이미지 칸에서 이름으로 고르면 됩니다. IOS 이미지는 이 PC 밖으로 나가지 않습니다.

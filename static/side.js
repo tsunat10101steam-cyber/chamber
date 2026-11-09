@@ -82,7 +82,8 @@ function boxPanel(n) {
     for (const [i, f] of n.ifaces.entries()) {
       const l = linkAt(n.id, f.name), pe = l && peerOf(l, n.id, f.name), pn = pe && byNode(pe.node);
       h += `<div class="bul-row"><b class="mono" title="${esc(f.name)}">${esc(portLabel(n, i))}</b>
-        ${n.kind === "switch" ? `<span class="muted small">${esc(t("l2_port"))}</span>` :
+        ${isSwPort(n, i) ? `<input type="text" class="mono" data-vlan="${i}" value="${esc(f.vlan || "")}" placeholder="${esc(t("vlan_ph"))}">` :
+          n.kind === "switch" && !isL3sw(n) ? `<span class="muted small">${esc(t("l2_port"))}</span>` :
           `<input type="text" class="mono" data-if="${i}" value="${esc(f.ip)}" placeholder="10.77.1.1/24">`}
         ${l ? `<button class="x" data-unlink="${esc(l.id)}" title="${esc(t("unlink"))}">⨯</button>` :
           n.ifaces.length > 1 ? `<button class="x" data-rmif="${i}" title="${esc(t("rm_port"))}">−</button>` : "<span></span>"}
@@ -90,7 +91,14 @@ function boxPanel(n) {
     }
     h += `</div>`;
   }
-  if (["pc", "server", "router", "whale"].includes(n.kind)) {
+  if (isL3sw(n)) {  // SVI: VLAN 마다 IP (VLAN 사이 라우팅)
+    h += `<h4>${esc(t("h_svis"))}<button class="mini" data-act="addsvi">${esc(t("add_svi"))}</button></h4>`;
+    h += (n.svis || []).length ? `<div class="bul">${n.svis.map((s, i) => `<div class="bul-row" style="grid-template-columns:90px minmax(0,1fr) auto">
+        <input type="number" class="mono" min="1" max="4094" data-svi="${i}" data-k="vlan" value="${esc(s.vlan)}" aria-label="VLAN">
+        <input type="text" class="mono" data-svi="${i}" data-k="ip" value="${esc(s.ip)}" placeholder="10.77.10.1/24">
+        <button class="x" data-rmsvi="${i}">−</button></div>`).join("")}</div>` : `<p class="muted small">${esc(t("svi_none"))}</p>`;
+  }
+  if (["pc", "server", "router", "whale"].includes(n.kind) || isL3sw(n)) {
     const auto = S.plan?.gw?.[n.id];
     h += `<label class="field"><span>${esc(t("gateway"))}</span><input type="text" class="mono" data-f="gw" value="${esc(n.gw)}"
       placeholder="${esc(auto ? t("gw_auto", { ip: auto }) : n.kind === "whale" ? t("gw_whale") : t("gw_none"))}"></label>`;
@@ -122,6 +130,7 @@ function imageOptions(kind) {
   const cat = S.cob?.catalog || [];
   for (const c of cat) if (!c.builtin && c.kinds.includes(kind)) o.push({ v: c.image, l: `${t("cw." + c.id)} · ${c.image}${c.have ? "" : " " + t("image_will_pull")}` });
   if (kind === "router") for (const im of S.cob?.ios || []) o.push({ v: im.image, l: `Cisco ${im.platform} · ${im.file}` });
+  if (kind === "switch") for (const im of S.cob?.ios || []) if (im.switch_ports?.length) o.push({ v: im.image, l: `${t("k_l3sw", { p: im.platform })} · ${im.file}` });
   for (const m of S.cob?.mine || []) o.push({ v: m.image, l: m.image });
   const cur = byNode(S.sel?.id)?.image;
   if (cur && !o.some(x => x.v === cur)) o.push({ v: cur, l: cur });
@@ -170,6 +179,16 @@ side.addEventListener("input", (e) => {
   const n = S.sel?.t === "box" && byNode(S.sel.id);
   if (!n) return;
   if (el.dataset.f) n[el.dataset.f] = el.value;
+  if (el.dataset.vlan !== undefined) {
+    const v = el.value.trim().toLowerCase();
+    n.ifaces[+el.dataset.vlan].vlan = v;
+    el.classList.toggle("bad", !!v && v !== "trunk" && !(/^\d+$/.test(v) && +v >= 1 && +v <= 4094));
+  }
+  if (el.dataset.svi !== undefined) {
+    const s = n.svis[+el.dataset.svi];
+    if (el.dataset.k === "vlan") s.vlan = +el.value || 1; else s.ip = el.value.trim();
+    if (el.dataset.k === "ip") el.classList.toggle("bad", !!el.value.trim() && !parseIf(el.value.trim()));
+  }
   if (el.dataset.if !== undefined) {
     n.ifaces[+el.dataset.if].ip = el.value.trim();
     el.classList.toggle("bad", !!el.value.trim() && !parseIf(el.value.trim()));
@@ -195,6 +214,12 @@ side.addEventListener("click", async (e) => {
   if (act === "iosreset") return iosReset(n);
   if (act === "addif") return addPort(n);
   if (act === "addroute") { n.routes.push({ dst: "", via: "" }); renderSide(); return; }
+  if (act === "addsvi") {
+    const used = new Set((n.svis ||= []).map(s => s.vlan));
+    let v = 10; while (used.has(v)) v += 10;
+    n.svis.push({ vlan: v, ip: "" }); renderSide(); renderBoard(); return save();
+  }
+  if (b.dataset.rmsvi !== undefined) { n.svis.splice(+b.dataset.rmsvi, 1); renderSide(); return save(); }
   if (b.dataset.unlink) { S.lab.links = S.lab.links.filter(l => l.id !== b.dataset.unlink); renderBoard(); renderSide(); return save(); }
   if (b.dataset.rmif !== undefined) { n.ifaces.splice(+b.dataset.rmif, 1); renderBoard(); renderSide(); return save(); }
   if (b.dataset.rmrt !== undefined) { n.routes.splice(+b.dataset.rmrt, 1); renderSide(); return save(); }

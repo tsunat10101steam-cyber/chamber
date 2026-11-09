@@ -150,8 +150,10 @@ def clean(lab):
                 "x": max(0, min(int(n.get("x") or 0), 5000)), "y": max(0, min(int(n.get("y") or 0), 4000))}
         if kind in ("router", "pc", "server", "switch"):
             img = str(n.get("image") or "").strip()
-            if img and not IMAGE_RE.fullmatch(img) or ios.is_ios(img) and kind != "router":
+            if img and not IMAGE_RE.fullmatch(img):
                 _bad("image")
+            if ios.is_ios(img) and not (kind == "router" or kind == "switch" and ios.platform_of(img) in ios.ESW):
+                _bad("image")  # Cisco 는 라우터, 또는 NM-16ESW 를 꽂을 수 있는 플랫폼의 L3 스위치
             node["image"] = img
         if kind == "whale":
             ctr = str(n.get("ctr") or "")
@@ -169,7 +171,16 @@ def clean(lab):
             if kind == "whale" and fname.startswith("eth"):
                 _bad(f"iface {fname}")  # Docker 가 붙인 eth0 과 부딪치지 않게 ch0 처럼
             names.add(fname)
-            ifs.append({"name": fname, "ip": "" if kind == "switch" else _iface(str(f.get("ip") or "").strip())})
+            l3sw = kind == "switch" and ios.is_ios(n.get("image"))
+            sp = l3sw and ios.is_switchport("switch", len(ifs))  # L3 스위치의 스위치 포트: IP 대신 VLAN
+            ip = "" if kind == "switch" and (not l3sw or sp) else _iface(str(f.get("ip") or "").strip())
+            entry = {"name": fname, "ip": ip}
+            if sp:
+                v = str(f.get("vlan") or "").strip().lower()
+                if v and v != "trunk" and not (v.isdigit() and 1 <= int(v) <= 4094):
+                    _bad(f"vlan {v}")
+                entry["vlan"] = v
+            ifs.append(entry)
         node["ifaces"] = ifs
         node["gw"] = _addr(str(n.get("gw") or "").strip(), "gateway") if kind in ("pc", "server", "router", "whale") else ""
         routes = []
@@ -181,8 +192,23 @@ def clean(lab):
             routes.append({"dst": dst, "via": _addr(str(r.get("via") or "").strip(), "via")})
         node["routes"] = routes if kind in ("router", "pc", "server", "whale") else []
         node["note"] = str(n.get("note") or "")[:2000]
-        if kind == "router" and ios.is_ios(node.get("image")):
+        if kind in ("router", "switch") and ios.is_ios(node.get("image")):
             node["ios_sync"] = str(n.get("ios_sync") or "")[:16]  # wr mem 한 설정을 bullet 으로 가져온 것의 지문
+        if kind == "switch" and ios.is_ios(node.get("image")):
+            svis, seenv = [], set()
+            for s in (n.get("svis") or [])[:64]:
+                try:
+                    v = int(s.get("vlan"))
+                except (TypeError, ValueError):
+                    _bad("svi vlan")
+                if not 1 <= v <= 4094 or v in seenv:
+                    _bad(f"svi vlan {v}")
+                seenv.add(v)
+                svis.append({"vlan": v, "ip": _iface(str(s.get("ip") or "").strip())})
+            node["svis"] = svis
+            node["gw"] = _addr(str(n.get("gw") or "").strip(), "gateway")
+            node["routes"] = [{"dst": str(ipaddress.IPv4Network(str(r.get("dst", "")).strip(), strict=False)),
+                               "via": _addr(str(r.get("via") or "").strip(), "via")} for r in (n.get("routes") or [])[:64]]
         nodes.append(node)
     out["nodes"] = nodes
     by = {n["id"]: n for n in nodes}
@@ -210,6 +236,11 @@ def clean(lab):
 
 
 # ---------------------------------------------------------------- 실행 계획
+def _l3(n):
+    """라우팅을 하는 box: 라우터, 또는 Cisco L3 스위치 (SVI)."""
+    return n["kind"] == "router" or n["kind"] == "switch" and ios.is_ios(n.get("image"))
+
+
 def _peer(lab, nid, ifc):
     for l in lab["links"]:
         for x, y in ((l["a"], l["b"]), (l["b"], l["a"])):
@@ -227,6 +258,9 @@ def plan(lab):
         for f in n["ifaces"]:
             if f["ip"]:
                 addrs.append((n, f["name"], ipaddress.ip_interface(f["ip"])))
+        for s in n.get("svis") or []:
+            if s["ip"]:
+                addrs.append((n, f"Vlan{s['vlan']}", ipaddress.ip_interface(s["ip"])))
     subnets = sorted({a[2].network for a in addrs}, key=lambda x: (int(x.network_address), x.prefixlen))
     host = next((n for n in wired if n["kind"] == "host"), None)
     host_ips = [a[2] for a in addrs if a[0] is host]
@@ -241,15 +275,15 @@ def plan(lab):
     for n in wired:
         if n["kind"] in ("pc", "server", "whale") and not n["gw"]:
             mine = [a[2] for a in addrs if a[0] is n]
-            cand = [a for a in addrs if a[0]["kind"] in ("router", "host") and a[0] is not n
+            cand = [a for a in addrs if (_l3(a[0]) or a[0]["kind"] == "host") and a[0] is not n
                     and any(a[2].network == m.network for m in mine)]
-            cand.sort(key=lambda a: a[0]["kind"] != "router")
+            cand.sort(key=lambda a: not _l3(a[0]))
             if cand and n["kind"] != "whale":
                 gw[n["id"]] = str(cand[0][2].ip)
             elif cand and n["kind"] == "whale":
                 via = str(cand[0][2].ip)
                 whale_routes[n["id"]] = [(str(s), via) for s in subnets if not any(s == m.network for m in mine)]
-        if n["kind"] == "router" and not n["gw"] and host_ips:
+        if _l3(n) and not n["gw"] and host_ips:
             mine = [a[2] for a in addrs if a[0] is n]
             h = next((h for h in host_ips if any(h.network == m.network for m in mine)), None)
             if h:
@@ -259,12 +293,29 @@ def plan(lab):
         hi = host_ips[0]
         # 이 PC 에서 chamber 안쪽으로 가는 다음 장비: 이 PC 와 같은 구간의 라우터(없으면 아무 장비)
         nxt = [a for a in addrs if a[0] is not host and a[2].network == hi.network]
-        nxt.sort(key=lambda a: a[0]["kind"] != "router")
+        nxt.sort(key=lambda a: not _l3(a[0]))
         host_route = {"ip": str(hi), "via": str(nxt[0][2].ip) if nxt else "",
                       "nets": [str(s) for s in subnets if s != hi.network]}
     for n in wired:
         if n["kind"] != "note" and n["ifaces"] and not any(_peer(lab, n["id"], f["name"]) for f in n["ifaces"]):
             issues.append({"code": "no_links", "box": n["name"]})
+    # L3 스위치의 스위치 포트에 꽂은 장비: 그 포트 VLAN 의 SVI 와 같은 서브넷이어야 한다
+    for l in lab["links"]:
+        for x, y in ((l["a"], l["b"]), (l["b"], l["a"])):
+            sw, other = by[x["node"]], by[y["node"]]
+            if not (sw["kind"] == "switch" and ios.is_ios(sw.get("image"))):
+                continue
+            i = next((k for k, f in enumerate(sw["ifaces"]) if f["name"] == x["ifc"]), None)
+            if i is None or not ios.is_switchport("switch", i) or (sw["ifaces"][i].get("vlan") or "1") == "trunk":
+                continue
+            v = int(sw["ifaces"][i].get("vlan") or 1)
+            svi = next((s for s in sw.get("svis") or [] if s["vlan"] == v and s["ip"]), None)
+            fo = next((f for f in other["ifaces"] if f["name"] == y["ifc"]), None)
+            if svi and fo and fo.get("ip") and other["kind"] != "switch":
+                if ipaddress.ip_interface(fo["ip"]).network != ipaddress.ip_interface(svi["ip"]).network:
+                    port = ios.ports(ios.platform_of(sw["image"]), "switch")[i][2].replace("FastEthernet", "Fa")
+                    issues.append({"code": "vlan_mismatch", "a": other["name"], "ai": fo["ip"], "b": sw["name"], "port": port,
+                                   "v": v, "si": svi["ip"], "nodes": [sw["id"], other["id"]]})
     # 선 하나의 양 끝이 서로 다른 서브넷이면 그 선으로는 아무것도 오가지 않는다 (예: 이 PC 10.77.1.254/24 ↔ 라우터 192.168.100.1/24)
     for l in lab["links"]:
         a, b = by[l["a"]["node"]], by[l["b"]["node"]]
@@ -282,7 +333,7 @@ def plan(lab):
 def wire_sig(lab):
     """실제로 꽂는 것에 영향을 주는 것만의 지문 (위치 · 이름 · 메모는 빼고)."""
     import hashlib
-    keep = [{k: n.get(k) for k in ("id", "kind", "image", "ctr", "ifaces", "gw", "routes")} for n in lab["nodes"] if n["kind"] in WIRED]
+    keep = [{k: n.get(k) for k in ("id", "kind", "image", "ctr", "ifaces", "gw", "routes", "svis")} for n in lab["nodes"] if n["kind"] in WIRED]
     links = sorted((l["a"]["node"], l["a"]["ifc"], l["b"]["node"], l["b"]["ifc"]) for l in lab["links"])
     return hashlib.sha1(json.dumps([keep, links], sort_keys=True).encode()).hexdigest()[:16]
 
@@ -385,7 +436,7 @@ def start(c, lab, log):
         P = pids[n["id"]]
         S.append(f"run ns {P} ip link set lo up")
         linked = [f for f in n["ifaces"] if _peer(lab, n["id"], f["name"])]
-        if n["kind"] == "switch":
+        if n["kind"] == "switch" and not ios.is_ios(n.get("image")):
             S += [f"run ns {P} ip link add br0 type bridge", f"run ns {P} ip link set br0 up"]
             for f in linked:
                 S += [f"run ns {P} ip link set {_sq(f['name'])} master br0", f"run ns {P} ip link set {_sq(f['name'])} up"]
@@ -604,7 +655,7 @@ def ios_reset(c, lab, nid):
     """bullet 설정을 라우터에 다시 넣고 다시 켠다 (라우터에 저장한 설정은 덮어쓴다)."""
     lab = clean(lab)
     n = next((x for x in lab["nodes"] if x["id"] == nid), None)
-    if not n or not ios.is_ios(n.get("image")):
+    if not n or not ios.is_ios(n.get("image")) or n["kind"] not in ("router", "switch"):
         raise ChamberError("not_found", detail="box")
     by0 = {x["id"]: x for x in lab["nodes"]}
 
@@ -627,7 +678,7 @@ def ios_sync(c, lab, boxes, every=8):
     import hashlib
     out = []
     for n in lab["nodes"]:
-        if n["kind"] != "router" or not ios.is_ios(n.get("image")) or boxes.get(n["id"]) != "running":
+        if n["kind"] not in ("router", "switch") or not ios.is_ios(n.get("image")) or boxes.get(n["id"]) != "running":
             continue
         key = f"{lab['id']}/{n['id']}"
         if time.time() - SYNC_AT.get(key, 0) < every:
@@ -642,14 +693,18 @@ def ios_sync(c, lab, boxes, every=8):
         h = hashlib.sha1(text.encode("latin-1", "replace")).hexdigest()[:16]
         if n.get("ios_sync") == h:
             continue
-        host, ifs, gw, routes = ios.parse_config(text, ios.platform_of(n["image"]))
+        cfg = ios.parse_config(text, ios.platform_of(n["image"]), n["kind"])
         for i, f in enumerate(n["ifaces"]):
-            if i in ifs:
-                f["ip"] = ifs[i]
-        n["gw"], n["routes"], n["ios_sync"] = gw, routes, h
-        if host and NAME_RE.fullmatch(host):
-            n["name"] = host
-        out.append({k: n[k] for k in ("id", "name", "ifaces", "gw", "routes", "ios_sync")})
+            if i in cfg["vlans"]:
+                f["vlan"] = cfg["vlans"][i]
+            elif i in cfg["ifs"]:
+                f["ip"] = cfg["ifs"][i]
+        if n["kind"] == "switch":
+            n["svis"] = cfg["svis"]
+        n["gw"], n["routes"], n["ios_sync"] = cfg["gw"], cfg["routes"], h
+        if cfg["host"] and NAME_RE.fullmatch(cfg["host"]):
+            n["name"] = cfg["host"]
+        out.append({k: n[k] for k in ("id", "name", "ifaces", "gw", "routes", "ios_sync", "svis") if k in n})
     if out:
         try:
             cur = load(lab["id"])
@@ -657,7 +712,12 @@ def ios_sync(c, lab, boxes, every=8):
             for n in cur["nodes"]:
                 if n["id"] in by:
                     n.update(by[n["id"]])
-            save(cur)
+            cur = save(cur)
+            # 라우터 안에서 바뀐 것뿐이고 서브넷도 그대로면 다시 꽂을 것이 없다 → '실행 중' 을 유지
+            st = WIRE_STATE.get(lab["id"])
+            if st and plan(cur)["subnets"] == st.get("subnets"):
+                st["sig"] = wire_sig(cur)
+                _save_wired()
         except ChamberError:
             pass
     return out

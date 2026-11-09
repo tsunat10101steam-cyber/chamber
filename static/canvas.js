@@ -17,10 +17,20 @@ const BOX_W = 176;
 // Cisco(Dynamips) 라우터: 이미지 이름이 chamber/ios-<플랫폼>:… , 포트 이름은 cobweb 목록(S.cob.platforms)에서
 const isIOS = (img) => (img || "").startsWith("chamber/ios-");
 const iosPlat = (img) => isIOS(img) ? img.slice(12).split(":")[0] : "";
+// L3 스위치(Cisco + NM-16ESW): 스위치 포트 Fa1/0~15 가 먼저, 라우티드 포트 Fa0/0 · 0/1 이 뒤
+const isL3sw = (n) => n.kind === "switch" && isIOS(n.image);
+const isSwPort = (n, i) => isL3sw(n) && i < 16;
+const iosPortsOf = (n) => (isL3sw(n) ? S.cob?.switch_platforms : S.cob?.platforms)?.[iosPlat(n.image)] || [];
 const iosPorts = (img) => S.cob?.platforms?.[iosPlat(img)] || [];
 const shortIf = (s) => s.replace("FastEthernet", "Fa").replace("GigabitEthernet", "Gi");
-function portLabel(n, i) { return isIOS(n.image) && iosPorts(n.image)[i] ? shortIf(iosPorts(n.image)[i]) : n.ifaces[i].name; }
-function maxPorts(n) { return isIOS(n.image) ? iosPorts(n.image).length || 2 : n.kind === "host" ? 1 : 16; }
+function portLabel(n, i) { return isIOS(n.image) && iosPortsOf(n)[i] ? shortIf(iosPortsOf(n)[i]) : n.ifaces[i].name; }
+function maxPorts(n) { return isIOS(n.image) ? iosPortsOf(n).length || 2 : n.kind === "host" ? 1 : 16; }
+// box 에 보이는 포트 값: IP, L3 스위치의 스위치 포트는 VLAN
+function portText(n, i) {
+  const f = n.ifaces[i];
+  if (isSwPort(n, i)) return f.vlan === "trunk" ? "trunk" : `vlan ${f.vlan || 1}`;
+  return n.kind === "switch" && !isL3sw(n) ? "" : f.ip || "–";
+}
 const byNode = (id) => S.lab.nodes.find(n => n.id === id);
 const linkAt = (nid, ifc) => S.lab.links.find(l => (l.a.node === nid && l.a.ifc === ifc) || (l.b.node === nid && l.b.ifc === ifc));
 const peerOf = (l, nid, ifc) => (l.a.node === nid && l.a.ifc === ifc) ? l.b : l.a;
@@ -40,6 +50,7 @@ function renderPalette() {
   h += item("pc", t("k_pc"), t("k_pc_s"), {});
   h += item("server", t("k_server"), t("k_server_s"), {});
   for (const im of S.cob?.ios || []) h += item("router", `Cisco ${im.platform}`, im.file, { image: im.image });
+  for (const im of S.cob?.ios || []) if (im.switch_ports?.length) h += item("switch", t("k_l3sw", { p: im.platform }), im.file, { image: im.image });
   h += item("host", t("k_host"), t("k_host_s"), {},
     hasHost ? t("host_one") : S.engine && !S.engine.wsl ? t("host_no_wsl") : "");
   h += item("note", t("k_note"), t("k_note_s"), {});
@@ -178,7 +189,7 @@ function renderBoard() {
     if (WIRED.has(n.kind)) {
       ports = `<div class="ports">${n.ifaces.map((f, i) => {
         const l = linkAt(n.id, f.name);
-        return `<div class="port" data-ifc="${esc(f.name)}" title="${esc(f.name)}"><b>${esc(portLabel(n, i))}</b><span class="ip">${esc(n.kind === "switch" ? "" : f.ip || "–")}</span>
+        return `<div class="port" data-ifc="${esc(f.name)}" title="${esc(f.name)}"><b>${esc(portLabel(n, i))}</b><span class="ip">${esc(portText(n, i))}</span>
           <i class="pin${l ? " on" : ""}" data-pin="${esc(f.name)}" title="${esc(t("pin_hint"))}"></i></div>`;
       }).join("")}</div>`;
     } else if (n.kind === "vm") {
@@ -381,6 +392,11 @@ function segment(nid, ifc, seen = new Set()) {
     if (seen.has(key)) return;
     seen.add(key);
     const n = byNode(id);
+    const fi = n.ifaces.findIndex(x => x.name === f);
+    if (isL3sw(n)) {  // L3 스위치: 스위치 포트는 그 VLAN 의 SVI, 라우티드 포트는 라우터처럼
+      out.push({ n, f: n.ifaces[fi], sw: isSwPort(n, fi) });
+      return;
+    }
     if (n.kind === "switch") {
       for (const p of n.ifaces) {
         if (seen.has(id + "/" + p.name) && p.name !== f) continue;
@@ -399,12 +415,16 @@ function segment(nid, ifc, seen = new Set()) {
 }
 function autoIP(l) {
   const seg = segment(l.a.node, l.a.ifc);
-  const need = seg.filter(x => x.f && !x.f.ip && x.n.kind !== "switch");
-  if (!need.length) return;
-  let sub = seg.map(x => parseIf(x.f?.ip)).find(Boolean);
+  // L3 스위치의 스위치 포트 쪽: 그 포트 VLAN 의 SVI 가 이 구간의 게이트웨이
+  const l3 = seg.find(x => x.sw);
+  const vlan = l3 ? (l3.f.vlan === "trunk" ? null : +(l3.f.vlan || 1)) : null;
+  const svi = l3 && vlan ? (l3.n.svis ||= []).find(s => s.vlan === vlan) : null;
+  const need = seg.filter(x => x.f && !x.f.ip && !x.sw && (x.n.kind !== "switch" || isL3sw(x.n)));
+  if (!need.length && !(l3 && vlan && !svi?.ip)) return;
+  let sub = (svi?.ip && parseIf(svi.ip)) || seg.filter(x => !x.sw).map(x => parseIf(x.f?.ip)).find(Boolean);
   if (!sub) {  // 새 구간: 10.77.N.0/24 중 비어 있는 것
     const used = new Set();
-    S.lab.nodes.forEach(n => n.ifaces.forEach(f => { const p = parseIf(f.ip); if (p) used.add(p.net); }));
+    S.lab.nodes.forEach(n => [...n.ifaces, ...(n.svis || [])].forEach(f => { const p = parseIf(f.ip); if (p) used.add(p.net); }));
     for (let i = 1; i < 255; i++) {
       const net = ip2n(`10.77.${i}.0`);
       if (!used.has(net)) { sub = { net, len: 24, mask: 0xffffff00 }; break; }
@@ -412,16 +432,22 @@ function autoIP(l) {
     if (!sub) return;
   }
   const taken = new Set();
-  S.lab.nodes.forEach(n => n.ifaces.forEach(f => { const p = parseIf(f.ip); if (p && p.net === sub.net) taken.add(p.ip - sub.net); }));
+  S.lab.nodes.forEach(n => [...n.ifaces, ...(n.svis || [])].forEach(f => { const p = parseIf(f.ip); if (p && p.net === sub.net) taken.add(p.ip - sub.net); }));
   const max = 2 ** (32 - sub.len) - 2;
   const pick = (from, down) => {
     for (let h = from; down ? h >= 1 : h <= max; h += down ? -1 : 1) if (!taken.has(h)) { taken.add(h); return h; }
     return null;
   };
+  // L3 스위치의 SVI 가 없으면 만든다 (.1)
+  if (l3 && vlan && !svi?.ip) {
+    const h = pick(1);
+    if (h) { if (svi) svi.ip = `${n2ip(sub.net + h)}/${sub.len}`; else l3.n.svis.push({ vlan, ip: `${n2ip(sub.net + h)}/${sub.len}` }); }
+  }
   // 라우터는 .1 부터, 이 PC 는 끝(.254), 나머지는 .10 부터
-  need.sort((x, y) => (x.n.kind !== "router") - (y.n.kind !== "router"));
+  const rt = (x) => x.n.kind === "router" || isL3sw(x.n);
+  need.sort((x, y) => !rt(x) - !rt(y));
   for (const x of need) {
-    const h = x.n.kind === "router" ? pick(1) : x.n.kind === "host" ? pick(max, true) : pick(Math.min(10, max));
+    const h = rt(x) ? pick(1) : x.n.kind === "host" ? pick(max, true) : pick(Math.min(10, max));
     if (h) x.f.ip = `${n2ip(sub.net + h)}/${sub.len}`;
   }
 }

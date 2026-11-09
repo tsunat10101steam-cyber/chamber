@@ -40,7 +40,8 @@ def listing(c):
             for t, s in sorted(local.items()) if t not in known and not t.startswith("chamber/")]
     import ios
     return {"catalog": items, "mine": mine, "ios": ios.list_images(c), "dyn": dock.has_image(c, ios.DYN_IMAGE),
-            "platforms": {k: [x[2] for x in ios.ports(k)] for k in ios.PLATFORMS}}
+            "platforms": {k: [x[2] for x in ios.ports(k)] for k in ios.PLATFORMS},
+            "switch_platforms": {k: [x[2] for x in ios.ports(k, "switch")] for k in ios.ESW}}
 
 
 def check_image(name):

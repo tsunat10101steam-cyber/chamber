@@ -34,13 +34,29 @@ PLATFORMS = {
 }
 
 
-def ports(platform):
+# L3 스위치: NM-16ESW(16포트 EtherSwitch)를 꽂을 슬롯. VLAN · 트렁크 · SVI(interface VlanN) + ip routing
+ESW = {"c3725": 1, "c3745": 1, "c2691": 1}
+ESW_PORTS = 16
+
+
+def layout(platform, kind="router"):
+    """[(슬롯, 모듈 또는 None=내장, 포트 수)] — eth 순서. L3 스위치는 스위치 포트(Fa1/0~15)가 먼저, 내장 라우티드 포트(Fa0/0 · 0/1)가 뒤."""
+    if kind == "switch":
+        return [(ESW[platform], "NM-16ESW", ESW_PORTS), (0, None, 2)]
+    return PLATFORMS[platform]["slots"]
+
+
+def ports(platform, kind="router"):
     """[(슬롯, 포트, 'FastEthernet1/0')] — eth 번호 순서."""
     out = []
-    for slot, _mod, n in PLATFORMS[platform]["slots"]:
+    for slot, _mod, n in layout(platform, kind):
         for p in range(n):
             out.append((slot, p, f"FastEthernet{slot}/{p}"))
     return out
+
+
+def is_switchport(kind, i):
+    return kind == "switch" and i < ESW_PORTS
 
 
 def detect(filename):
@@ -164,7 +180,8 @@ cmd(f"vm set_ios {NAME} /ios/image.bin")
 cmd(f"vm set_ram {NAME} {RAM}")
 cmd(f"vm set_con_tcp_port {NAME} 2000")
 if PLAT != "c7200":
-    cmd(f"vm set_disk0 {NAME} 0", True)
+    # 플래시(disk0): 스위치 모듈(NM-16ESW)은 VLAN 을 flash:vlan.dat 에 저장하므로 켜 두고, 라우터는 끈다
+    cmd(f"vm set_disk0 {NAME} {os.environ.get('CHAMBER_DISK0', '0')}", True)
 for slot, mod in SLOTS:
     cmd(f"vm slot_add_binding {NAME} {slot} 0 {mod}")
 def bind(dev, sp):
@@ -323,7 +340,8 @@ def list_images(c):
             if tag.startswith(IOS_PREFIX):
                 plat = lb.get(LABEL_PLATFORM, "")
                 out.append({"image": tag, "platform": plat, "file": lb.get(LABEL_FILE, ""), "size": im.get("Size", 0),
-                            "ports": [x[2] for x in ports(plat)] if plat in PLATFORMS else []})
+                            "ports": [x[2] for x in ports(plat)] if plat in PLATFORMS else [],
+                            "switch_ports": [x[2] for x in ports(plat, "switch")] if plat in ESW else []})
     return out
 
 
@@ -334,23 +352,41 @@ DRIVER_VER = __import__("hashlib").sha1(DRIVER.encode()).hexdigest()[:10]
 def env_for(image, node):
     plat = platform_of(image)
     spec = PLATFORMS[plat]
-    pl = ports(plat)
+    kind = node["kind"]
+    if kind == "switch" and plat not in ESW:
+        raise ChamberError("ios_no_switch", name=node["name"], p=plat)
+    pl = ports(plat, kind)
     if len(node["ifaces"]) > len(pl):
         raise ChamberError("ios_ports", name=node["name"], n=len(pl))
-    slots = " ".join(f"{s}:{m}" for s, m, _ in spec["slots"] if m)
+    slots = " ".join(f"{s}:{m}" for s, m, _ in layout(plat, kind) if m)
     pm = " ".join(f"{f['name']}={pl[i][0]}/{pl[i][1]}" for i, f in enumerate(node["ifaces"]))
     return {"CHAMBER_PLATFORM": plat, "CHAMBER_RAM": str(spec["ram"]), "CHAMBER_SLOTS": slots, "CHAMBER_PORTS": pm,
-            "CHAMBER_DRIVER": DRIVER_VER}
+            "CHAMBER_DRIVER": DRIVER_VER, "CHAMBER_DISK0": "16" if kind == "switch" else "0"}
 
 
 def startup_config(lab, node, plan, peer_kind):
-    """bullet(포트 IP · 게이트웨이 · 정적 경로) + 자동 OSPF → IOS 설정."""
+    """bullet(포트 IP · VLAN · SVI · 게이트웨이 · 정적 경로) + 자동 OSPF → IOS 설정."""
     plat = platform_of(node.get("image"))
-    pl = ports(plat)
+    kind = node["kind"]
+    pl = ports(plat, kind)
     L = [f"hostname {re.sub(r'[^A-Za-z0-9-]', '-', node['name'])[:60] or 'R'}", "no ip domain-lookup", "ip routing", "!"]
     nets = []
+    if kind == "switch":  # L3 스위치: VLAN 을 먼저 만든다 (flash:vlan.dat)
+        vlans = {int(f.get("vlan")) for i, f in enumerate(node["ifaces"])
+                 if is_switchport(kind, i) and str(f.get("vlan") or "").isdigit()}
+        vlans |= {int(s["vlan"]) for s in node.get("svis") or []}
+        for v in sorted(vlans - {1}):
+            L += [f"vlan {v}", "!"]
     for i, f in enumerate(node["ifaces"]):
         L.append(f"interface {pl[i][2]}")
+        if is_switchport(kind, i):
+            v = str(f.get("vlan") or "1")
+            if v == "trunk":
+                L += [" switchport trunk encapsulation dot1q", " switchport mode trunk"]
+            elif v != "1":
+                L.append(f" switchport access vlan {v}")
+            L += [" no shutdown", "!"]
+            continue
         if f["ip"]:
             ii = ipaddress.ip_interface(f["ip"])
             L.append(f" ip address {ii.ip} {ii.netmask}")
@@ -359,6 +395,15 @@ def startup_config(lab, node, plan, peer_kind):
                 L += [" ip ospf hello-interval 2", " ip ospf dead-interval 8"]
                 if peer_kind(node["id"], f["name"]) == "router":
                     L.append(" ip ospf network point-to-point")
+        L += [" no shutdown", "!"]
+    for s in sorted(node.get("svis") or [], key=lambda s: int(s["vlan"])):  # SVI: VLAN 사이 라우팅
+        L.append(f"interface Vlan{int(s['vlan'])}")
+        if s.get("ip"):
+            ii = ipaddress.ip_interface(s["ip"])
+            L.append(f" ip address {ii.ip} {ii.netmask}")
+            nets.append(ii.network)
+            if lab.get("auto_ospf"):
+                L += [" ip ospf hello-interval 2", " ip ospf dead-interval 8"]
         L += [" no shutdown", "!"]
     gw = node.get("gw") or plan["gw"].get(node["id"])
     if gw:
@@ -406,10 +451,11 @@ def user_saved(text):
     return bool(lines) and not lines[0].startswith("hostname")
 
 
-def parse_config(text, platform):
-    """IOS 설정 → (hostname, {포트 순번: 'a.b.c.d/len' 또는 ''}, 기본 게이트웨이, [정적 경로])"""
-    names = [x[2] for x in ports(platform)]
+def parse_config(text, platform, kind="router"):
+    """IOS 설정 → {host, ifs: {포트 순번: IP}, vlans: {포트 순번: '10' · 'trunk' · '1'}, svis: [{vlan, ip}], gw, routes}"""
+    names = [x[2] for x in ports(platform, kind)]
     host, ifs, gw, routes, cur = "", {}, "", [], None
+    vlans, svis, svi = {}, [], None
     for raw in text.replace("\r", "").split("\n"):
         l = raw.rstrip()
         if l.startswith("hostname "):
@@ -419,9 +465,28 @@ def parse_config(text, platform):
             cur = names.index(m.group(1)) if m.group(1) in names else None
             if cur is not None:
                 ifs[cur] = ""
+                if is_switchport(kind, cur):
+                    vlans[cur] = "1"
+            mv = re.match(r"Vlan(\d+)$", m.group(1))
+            svi = {"vlan": int(mv.group(1)), "ip": ""} if mv else None
+            if svi:
+                svis.append(svi)
             continue
         if l and not l.startswith(" "):
-            cur = None
+            cur, svi = None, None
+        if svi is not None:
+            m = re.match(r" ip address (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+)$", l)
+            if m:
+                try:
+                    svi["ip"] = str(ipaddress.ip_interface(f"{m.group(1)}/{m.group(2)}"))
+                except ValueError:
+                    pass
+        if cur is not None and is_switchport(kind, cur):
+            m = re.match(r" switchport access vlan (\d+)$", l)
+            if m:
+                vlans[cur] = m.group(1)
+            if l.strip() == "switchport mode trunk":
+                vlans[cur] = "trunk"
         if cur is not None:
             m = re.match(r" ip address (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+)$", l)  # secondary 는 뺀다
             if m:
@@ -438,4 +503,5 @@ def parse_config(text, platform):
                     routes.append({"dst": str(ipaddress.IPv4Network(f"{m.group(1)}/{m.group(2)}", strict=False)), "via": m.group(3)})
                 except ValueError:
                     pass
-    return host, ifs, gw, routes
+    svis = [s for s in svis if s["vlan"] != 1 or s["ip"]]  # IOS 가 늘 넣어 두는 빈 Vlan1 은 뺀다
+    return {"host": host, "ifs": ifs, "vlans": vlans, "svis": svis, "gw": gw, "routes": routes}
