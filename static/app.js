@@ -13,8 +13,15 @@ const S = {
 };
 
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} :
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let r;
+  try {
+    r = await fetch(path, body === undefined ? {} :
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch {
+    offline(true);
+    const e = new Error(t("err.offline")); e.offline = true; throw e;
+  }
+  offline(false);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(errText(j) || r.statusText); e.data = j; throw e; }
   return j;
@@ -27,7 +34,20 @@ const fmtBytes = (n) => {
   while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
   return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
 };
+// 서버가 꺼졌으면 한 줄 막대로 알리고, 같은 이유의 알림은 띄우지 않는다
+function offline(on) {
+  if (!!S.offline === on) return;
+  S.offline = on;
+  let el = $("#offline");
+  if (on && !el) {
+    el = document.createElement("div");
+    el.id = "offline"; el.className = "offline";
+    document.body.appendChild(el);
+  }
+  if (el) { el.textContent = t("offline"); el.hidden = !on; }
+}
 function toast(text) {
+  if (S.offline && text === t("err.offline")) return;
   const el = document.createElement("div");
   el.className = "toast"; el.textContent = text;
   document.body.appendChild(el);
@@ -298,7 +318,7 @@ async function checkUpdate(force) {
   };
 }
 
-const beat = () => fetch("/api/heartbeat", { method: "POST" }).catch(() => {});
+const beat = () => fetch("/api/heartbeat", { method: "POST" }).then(() => offline(false), () => offline(true));
 beat(); setInterval(beat, 30000);
 addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
 

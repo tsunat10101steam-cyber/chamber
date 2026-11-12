@@ -567,7 +567,7 @@ def bye():
         time.sleep(15)
         if (STATE["last_beat"] or 0) < t and not _busy():
             os._exit(0)
-    if APP_MODE:
+    if APP_MODE and WINDOW["proc"] is None:  # 창 프로세스를 지켜보면 그쪽이 정한다
         threading.Thread(target=later, daemon=True).start()
     return "", 204
 
@@ -576,6 +576,7 @@ def bye():
 PORT = int(os.environ.get("CHAMBER_PORT", 8767))
 URL = f"http://127.0.0.1:{PORT}"
 APP_MODE = False
+WINDOW = {"proc": None}  # 우리가 띄운 앱 창(Edge --app) 프로세스
 BROWSERS = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -589,8 +590,10 @@ def _open_app_window():
     if not exe:
         return False
     profile = Path(os.environ.get("LOCALAPPDATA", ROOT)) / "Chamber" / "browser"
-    subprocess.Popen([exe, f"--app={URL}", f"--user-data-dir={profile}", "--window-size=1480,940",
-                      "--no-first-run", "--no-default-browser-check"])
+    p = subprocess.Popen([exe, f"--app={URL}", f"--user-data-dir={profile}", "--window-size=1480,940",
+                          "--no-first-run", "--no-default-browser-check"])
+    if WINDOW["proc"] is None:
+        WINDOW["proc"] = p
     return True
 
 
@@ -599,10 +602,25 @@ def _busy():
 
 
 def _watchdog():
+    """창이 닫히면 서버 종료.
+    앱 창은 Chamber 전용 프로필이라 창 프로세스가 곧 창이다: 그 프로세스가 끝날 때만 끈다.
+    (heartbeat 로만 판단하면 PC 가 잠들었다 깨거나 창이 오래 가려져 타이머가 멈춘 사이에 서버가 꺼져
+    창에 'Failed to fetch' 만 남았다)
+    창 프로세스를 못 잡았으면 heartbeat 로 판단하되, 이 루프 자체가 멈췄던 시간(잠자기)은 빼고 센다."""
+    last = time.time()
     while True:
         time.sleep(15)
+        now = time.time()
+        if now - last > 60:  # 잠자기에서 깸: 창이 다시 heartbeat 를 보낼 시간을 준다
+            STATE["last_beat"] = now
+        last = now
+        p = WINDOW["proc"]
+        if p is not None:
+            if p.poll() is not None and not _busy():
+                os._exit(0)
+            continue
         beat = STATE["last_beat"]
-        if beat and time.time() - beat > 180 and not _busy():
+        if beat and now - beat > 180 and not _busy():
             os._exit(0)
 
 
